@@ -1,4 +1,3 @@
-cudart
-cudart.o
+bin/
 out.jpg
 out.ppm

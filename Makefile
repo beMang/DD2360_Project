@@ -1,37 +1,72 @@
 CUDA_PATH     ?= /usr/local/cuda
 HOST_COMPILER  = g++
-NVCC           = $(CUDA_PATH)/bin/nvcc -ccbin $(HOST_COMPILER)
+NVCC           = nvcc -ccbin $(HOST_COMPILER)
 
-# select one of these for Debug vs. Release
-#NVCC_DBG       = -g -G
 NVCC_DBG       =
 
-NVCCFLAGS      = $(NVCC_DBG) -m64
-GENCODE_FLAGS  = -gencode arch=compute_60,code=sm_60
+# GPU architecture for GTX 1080 (SM 61 for Adrien, might adapt for your GPU)
+ARCH_FLAGS = \
+    -arch=sm_61 \
+    -gencode arch=compute_61,code=sm_61 \
+    -gencode arch=compute_61,code=compute_61
 
-SRCS = main.cu
-INCS = vec3.h ray.h hitable.h hitable_list.h sphere.h camera.h material.h
+NVCCFLAGS  = $(NVCC_DBG) -m64 $(ARCH_FLAGS) -O3 -use_fast_math
 
-cudart: cudart.o
-	$(NVCC) $(NVCCFLAGS) $(GENCODE_FLAGS) -o cudart cudart.o
+# --------------------------------------------------------------
+# Directories
+# --------------------------------------------------------------
+SRC_DIR = src
+BIN_DIR = bin
 
-cudart.o: $(SRCS) $(INCS)
-	$(NVCC) $(NVCCFLAGS) $(GENCODE_FLAGS) -o cudart.o -c main.cu
+# Sources, headers, objects
+SRCS = $(wildcard $(SRC_DIR)/*.cu)
+INCS = $(wildcard $(SRC_DIR)/*.h)
+OBJS = $(patsubst $(SRC_DIR)/%.cu,$(BIN_DIR)/%.o,$(SRCS))
 
-out.ppm: cudart
+TARGET = $(BIN_DIR)/cudart
+
+# --------------------------------------------------------------
+# Build executable
+# --------------------------------------------------------------
+all: $(BIN_DIR) $(TARGET)
+
+$(TARGET): $(OBJS)
+	$(NVCC) $(NVCCFLAGS) -o $@ $^
+
+# --------------------------------------------------------------
+# Compile .cu into .o in bin/
+# --------------------------------------------------------------
+$(BIN_DIR)/%.o: $(SRC_DIR)/%.cu $(INCS) | $(BIN_DIR)
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
+# --------------------------------------------------------------
+# Create bin directory if it doesn't exist
+# --------------------------------------------------------------
+$(BIN_DIR):
+	mkdir -p $(BIN_DIR)
+
+# --------------------------------------------------------------
+# Output image
+# --------------------------------------------------------------
+out.ppm: $(TARGET)
 	rm -f out.ppm
-	./cudart > out.ppm
+	$(TARGET) > out.ppm
 
 out.jpg: out.ppm
 	rm -f out.jpg
 	ppmtojpeg out.ppm > out.jpg
 
-profile_basic: cudart
-	nvprof ./cudart > out.ppm
+# --------------------------------------------------------------
+# Profiling
+# --------------------------------------------------------------
+profile_basic: $(TARGET)
+	nvprof $(TARGET) > out.ppm
 
-# use nvprof --query-metrics
-profile_metrics: cudart
-	nvprof --metrics achieved_occupancy,inst_executed,inst_fp_32,inst_fp_64,inst_integer ./cudart > out.ppm
+profile_metrics: $(TARGET)
+	nvprof --metrics achieved_occupancy,inst_executed,inst_fp_32,inst_fp_64,inst_integer $(TARGET) > out.ppm
 
+# --------------------------------------------------------------
+# Clean
+# --------------------------------------------------------------
 clean:
-	rm -f cudart cudart.o out.ppm out.jpg
+	rm -rf $(BIN_DIR) out.ppm out.jpg
