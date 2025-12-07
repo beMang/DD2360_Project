@@ -48,25 +48,21 @@ $(BIN_DIR):
 # --------------------------------------------------------------
 # Output image
 # --------------------------------------------------------------
-out.ppm: $(TARGET)
-	rm -f out.ppm
-	$(TARGET) > out.ppm
-
-out.jpg: out.ppm
-	rm -f out.jpg
-	ppmtojpeg out.ppm > out.jpg
+test: $(TARGET)
+	rm -f image.ppm
+	$(TARGET)
 
 # --------------------------------------------------------------
 # Profiling
 # --------------------------------------------------------------
 profile_basic: $(TARGET)
-	nvprof $(TARGET) > out.ppm
+	nvprof $(TARGET)
 
 profile_metrics: $(TARGET)
-	nvprof --metrics achieved_occupancy,inst_executed,inst_fp_32,inst_fp_64,inst_integer $(TARGET) > out.ppm
+	nvprof --metrics achieved_occupancy,inst_executed,inst_fp_32,inst_fp_64,inst_integer $(TARGET)
 
 # --------------------------------------------------------------
 # Clean
 # --------------------------------------------------------------
 clean:
-	rm -rf $(BIN_DIR) out.ppm out.jpg
+	rm -rf $(BIN_DIR) image.ppm
