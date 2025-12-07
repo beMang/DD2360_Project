@@ -67,7 +67,7 @@ __global__ void render_init(int max_x, int max_y, curandState *rand_state) {
     curand_init(1984+pixel_index, 0, 0, &rand_state[pixel_index]);
 }
 
-__global__ void render(vec3 *fb, int max_x, int max_y, int ns, camera **cam, hitable **world, curandState *rand_state) {
+__global__ void render(vec3_8bit *fb, int max_x, int max_y, int ns, camera **cam, hitable **world, curandState *rand_state) {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     int j = threadIdx.y + blockIdx.y * blockDim.y;
     if((i >= max_x) || (j >= max_y)) return;
@@ -85,7 +85,7 @@ __global__ void render(vec3 *fb, int max_x, int max_y, int ns, camera **cam, hit
     col[0] = sqrt(col[0]);
     col[1] = sqrt(col[1]);
     col[2] = sqrt(col[2]);
-    fb[pixel_index] = col;
+    fb[pixel_index] = vec3_8bit(static_cast<u_int8_t>(255.99f*col[0]), static_cast<u_int8_t>(255.99f*col[1]), static_cast<u_int8_t>(255.99f*col[2]));
 }
 
 #define RND (curand_uniform(&local_rand_state))
@@ -153,10 +153,10 @@ int main() {
     std::cerr << "in " << tx << "x" << ty << " blocks.\n";
 
     int num_pixels = nx*ny;
-    size_t fb_size = num_pixels*sizeof(vec3);
+    size_t fb_size = num_pixels*sizeof(vec3_8bit);
 
     // allocate FB
-    vec3 *fb;
+    vec3_8bit *fb;
     checkCudaErrors(cudaMallocManaged((void **)&fb, fb_size));
 
     // allocate random state

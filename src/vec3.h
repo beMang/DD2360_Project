@@ -6,8 +6,6 @@
 #include <iostream>
 
 class vec3  {
-
-
 public:
     __host__ __device__ vec3() {}
     __host__ __device__ vec3(float e0, float e1, float e2) { e[0] = e0; e[1] = e1; e[2] = e2; }
@@ -39,6 +37,15 @@ public:
 };
 
 
+/**
+ * A compact 8-bit per channel version of vec3 for framebuffer storage (faster memory transfers)
+ */
+class vec3_8bit {
+public:
+    __host__ __device__ vec3_8bit() {}
+    __host__ __device__ vec3_8bit(u_int8_t e0, u_int8_t e1, u_int8_t e2) { e[0] = e0; e[1] = e1; e[2] = e2; }
+    u_int8_t e[3];
+};
 
 inline std::istream& operator>>(std::istream &is, vec3 &t) {
     is >> t.e[0] >> t.e[1] >> t.e[2];
