@@ -200,6 +200,8 @@ int main() {
     // output FB as ppm image in file
     saveFramebufferAsPPM("image.ppm", fb, nx, ny);
 
+    MSE_error("image.ppm", "ref.ppm");
+
     // clean up
     checkCudaErrors(cudaDeviceSynchronize());
     free_world<<<1,1>>>(d_list,d_world,d_camera);
