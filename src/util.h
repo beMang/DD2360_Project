@@ -57,9 +57,9 @@ void MSE_error(const char* file1, const char* file2){
         mse += (r1 - r2) * (r1 - r2)/65025.0;
         mse += (g1 - g2) * (g1 - g2)/65025.0;
         mse += (b1 - b2) * (b1 - b2)/65025.0;
-        count += 3;
+        count += 3; //Normalize by number of color channels
     }
-    mse /= 3*count; // Normalize by number of color components
+    mse /= count;
 
     printf("Mean Squared Error (MSE) between frames: %f %%\n", 100*mse);
     double psnr = 10.0 * log10(1.0 / mse);
