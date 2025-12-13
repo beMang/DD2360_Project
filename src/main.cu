@@ -201,7 +201,14 @@ int main() {
     // output FB as ppm image in file
     saveFramebufferAsPPM("image.ppm", fb, nx, ny);
 
-    MSE_error("image.ppm", "ref.ppm");
+    // Compute and prints metrics
+    float mse = MSE_error("image.ppm", "ref.ppm");
+    printf("Mean Squared Error (MSE) between frames: %f %%\n", 100*mse);
+    double psnr = 10.0 * log10(1.0 / mse);
+    printf("Peak Signal-to-Noise Ratio (PSNR): %f dB\n", psnr);
+
+    float ssim = SSIM_error("image.ppm", "ref.ppm", nx, ny);
+    printf("Structural Similarity Index (SSIM) between frames: %f %%\n", 100*ssim);
 
     // clean up
     checkCudaErrors(cudaDeviceSynchronize());
