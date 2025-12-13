@@ -8,6 +8,7 @@ class hitable_list: public hitable  {
         __device__ hitable_list() {}
         __device__ hitable_list(hitable **l, int n) {list = l; list_size = n; }
         __device__ virtual bool hit(const ray& r, float tmin, float tmax, hit_record& rec) const;
+        __device__ virtual aabb bounding_box() const;
         hitable **list;
         int list_size;
 };
@@ -24,6 +25,25 @@ __device__ bool hitable_list::hit(const ray& r, float t_min, float t_max, hit_re
             }
         }
         return hit_anything;
+}
+
+/**
+ * Compute bounding box for each object in the list
+ * @return AABB that contains all objects in the list
+ */
+__device__ aabb hitable_list::bounding_box() const {
+        aabb box = aabb();
+        if (list_size < 1) return box; // This might create bugs
+        
+        aabb temp_box = list[0]->bounding_box();
+        box = temp_box;
+        
+        for (int i = 1; i < list_size; i++) {
+            temp_box = list[i]->bounding_box();
+            box = surrounding_box(box, temp_box);
+        }
+        
+        return box;
 }
 
 #endif
