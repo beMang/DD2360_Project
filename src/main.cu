@@ -1,15 +1,58 @@
 #include <iostream>
 #include <time.h>
 #include <float.h>
+#include <vector>
+#include <algorithm>
+#include <random>
 #include <curand_kernel.h>
 #include "vec3.h"
 #include "ray.h"
 #include "sphere.h"
 #include "hitable_list.h"
+#include "bvh.h"
 #include "camera.h"
 #include "material.h"
 #include "util.h"
 
+__global__ void generate_scene_data(SphereData* spheres, int* out_count) {
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        curandState rand_state;
+        curand_init(1984, 0, 0, &rand_state);
+
+        int idx = 0;
+        // Ground
+        spheres[idx++] = {vec3(0,-1000.0f,-1), 1000.0f, 0, vec3(0.5f, 0.5f, 0.5f), 0.0f, 1.0f};
+
+        for(int a = -11; a < 11; a++) {
+            for(int b = -11; b < 11; b++) {
+                float choose_mat = curand_uniform(&rand_state);
+                vec3 center(a + curand_uniform(&rand_state), 0.2f, b + curand_uniform(&rand_state));
+                if(choose_mat < 0.8f) {
+                    vec3 albedo(curand_uniform(&rand_state)*curand_uniform(&rand_state),
+                                curand_uniform(&rand_state)*curand_uniform(&rand_state),
+                                curand_uniform(&rand_state)*curand_uniform(&rand_state));
+                    spheres[idx++] = {center, 0.2f, 0, albedo, 0.0f, 1.0f};
+                }
+                else if(choose_mat < 0.95f) {
+                    vec3 albedo(0.5f*(1.0f+curand_uniform(&rand_state)),
+                                0.5f*(1.0f+curand_uniform(&rand_state)),
+                                0.5f*(1.0f+curand_uniform(&rand_state)));
+                    float fuzz = 0.5f * curand_uniform(&rand_state);
+                    spheres[idx++] = {center, 0.2f, 1, albedo, fuzz, 1.0f};
+                }
+                else {
+                    spheres[idx++] = {center, 0.2f, 2, vec3(1.0f,1.0f,1.0f), 0.0f, 1.5f};
+                }
+            }
+        }
+
+        spheres[idx++] = {vec3(0,1,0), 1.0f, 2, vec3(1,1,1), 0.0f, 1.5f};
+        spheres[idx++] = {vec3(-4,1,0), 1.0f, 0, vec3(0.4f,0.2f,0.1f), 0.0f, 1.0f};
+        spheres[idx++] = {vec3(4,1,0), 1.0f, 1, vec3(0.7f,0.6f,0.5f), 0.0f, 1.0f};
+
+        *out_count = idx;
+    }
+}
 // limited version of checkCudaErrors from helper_cuda.h in CUDA examples
 #define checkCudaErrors(val) check_cuda( (val), #val, __FILE__, __LINE__ )
 
@@ -90,51 +133,46 @@ __global__ void render(vec3_8bit *fb, int max_x, int max_y, int ns, camera **cam
 
 #define RND (curand_uniform(&local_rand_state))
 
-__global__ void create_world(hitable **d_list, hitable **d_world, camera **d_camera, int nx, int ny, curandState *rand_state) {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        curandState local_rand_state = *rand_state;
-        d_list[0] = new sphere(vec3(0,-1000.0,-1), 1000,
-                               new lambertian(vec3(0.5, 0.5, 0.5)));
-        int i = 1;
-        for(int a = -11; a < 11; a++) {
-            for(int b = -11; b < 11; b++) {
-                float choose_mat = RND;
-                vec3 center(a+RND,0.2,b+RND);
-                if(choose_mat < 0.8f) {
-                    d_list[i++] = new sphere(center, 0.2,
-                                             new lambertian(vec3(RND*RND, RND*RND, RND*RND)));
-                }
-                else if(choose_mat < 0.95f) {
-                    d_list[i++] = new sphere(center, 0.2,
-                                             new metal(vec3(0.5f*(1.0f+RND), 0.5f*(1.0f+RND), 0.5f*(1.0f+RND)), 0.5f*RND));
-                }
-                else {
-                    d_list[i++] = new sphere(center, 0.2, new dielectric(1.5));
-                }
-            }
-        }
-        d_list[i++] = new sphere(vec3(0, 1,0),  1.0, new dielectric(1.5));
-        d_list[i++] = new sphere(vec3(-4, 1, 0), 1.0, new lambertian(vec3(0.4, 0.2, 0.1)));
-        d_list[i++] = new sphere(vec3(4, 1, 0),  1.0, new metal(vec3(0.7, 0.6, 0.5), 0.0));
-        *rand_state = local_rand_state;
-        *d_world  = new hitable_list(d_list, 22*22+1+3);
+__global__ void instantiate_spheres(const SphereData* sphere_data, int n, hitable **d_list) {
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx >= n) return;
 
+    const SphereData& s = sphere_data[idx];
+    material *mat = nullptr;
+    if (s.mat_type == 0) {
+        mat = new lambertian(s.albedo);
+    } else if (s.mat_type == 1) {
+        mat = new metal(s.albedo, s.fuzz);
+    } else {
+        mat = new dielectric(s.ref_idx);
+    }
+    d_list[idx] = new sphere(s.center, s.radius, mat);
+}
+
+__global__ void create_world_from_flat(const BVHNodeData* nodes, int node_count, hitable **d_list, hitable **d_world) {
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        *d_world = new bvh_flat_world(nodes, node_count, d_list);
+    }
+}
+
+__global__ void create_camera_kernel(camera **d_camera, int nx, int ny) {
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
         vec3 lookfrom(13,2,3);
         vec3 lookat(0,0,0);
-        float dist_to_focus = 10.0; (lookfrom-lookat).length();
-        float aperture = 0.1;
+        float dist_to_focus = (lookfrom - lookat).length();
+        float aperture = 0.1f;
         *d_camera   = new camera(lookfrom,
                                  lookat,
                                  vec3(0,1,0),
-                                 30.0,
+                                 30.0f,
                                  float(nx)/float(ny),
                                  aperture,
                                  dist_to_focus);
     }
 }
 
-__global__ void free_world(hitable **d_list, hitable **d_world, camera **d_camera) {
-    for(int i=0; i < 22*22+1+3; i++) {
+__global__ void free_world(hitable **d_list, int count, hitable **d_world, camera **d_camera) {
+    for(int i = 0; i < count; i++) {
         delete ((sphere *)d_list[i])->mat_ptr;
         delete d_list[i];
     }
@@ -162,26 +200,70 @@ int main() {
     vec3_8bit *fb;
     checkCudaErrors(cudaMallocManaged((void **)&fb, fb_size));
 
-    // allocate random state
+    // allocate random state for per-pixel sampling
     curandState *d_rand_state;
     checkCudaErrors(cudaMalloc((void **)&d_rand_state, num_pixels*sizeof(curandState)));
-    curandState *d_rand_state2;
-    checkCudaErrors(cudaMalloc((void **)&d_rand_state2, 1*sizeof(curandState)));
 
-    // we need that 2nd random state to be initialized for the world creation
-    rand_init<<<1,1>>>(d_rand_state2);
+    // Build scene on GPU using original curand sequence, then pull to host for BVH build
+    const int max_spheres = 22*22 + 4;
+    SphereData *d_sphere_data;
+    checkCudaErrors(cudaMalloc((void**)&d_sphere_data, max_spheres * sizeof(SphereData)));
+    int *d_sphere_count;
+    checkCudaErrors(cudaMalloc((void**)&d_sphere_count, sizeof(int)));
+    generate_scene_data<<<1,1>>>(d_sphere_data, d_sphere_count);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
 
-    // make our world of hitables & the camera
+    int num_hitables = 0;
+    checkCudaErrors(cudaMemcpy(&num_hitables, d_sphere_count, sizeof(int), cudaMemcpyDeviceToHost));
+    std::vector<SphereData> spheres(num_hitables);
+    checkCudaErrors(cudaMemcpy(spheres.data(), d_sphere_data, num_hitables * sizeof(SphereData), cudaMemcpyDeviceToHost));
+
+    std::vector<int> prim_indices(num_hitables);
+    std::vector<aabb> prim_boxes(num_hitables);
+    for (int i = 0; i < num_hitables; i++) prim_indices[i] = i;
+    for (int i = 0; i < num_hitables; i++) prim_boxes[i] = box_for_sphere(spheres[i]);
+    std::vector<BVHNodeData> nodes;
+    nodes.reserve(2 * num_hitables);
+    build_sah_bvh(prim_indices, 0, num_hitables, spheres, prim_boxes, nodes, 4);
+
+    // Reorder sphere array to match the final BVH leaf ordering (prim_indices now holds the permutation).
+    {
+        std::vector<SphereData> reordered(num_hitables);
+        for (int i = 0; i < num_hitables; i++) {
+            reordered[i] = spheres[prim_indices[i]];
+        }
+        spheres.swap(reordered);
+    }
+
+    // Copy sphere data to device (now in BVH order)
+    checkCudaErrors(cudaMemcpy(d_sphere_data, spheres.data(), spheres.size() * sizeof(SphereData), cudaMemcpyHostToDevice));
+
+    // Allocate device list of primitives
     hitable **d_list;
-    int num_hitables = 22*22+1+3;
     checkCudaErrors(cudaMalloc((void **)&d_list, num_hitables*sizeof(hitable *)));
+
+    // Instantiate spheres + materials on device
+    int threads_per_block = 128;
+    int blocks_per_grid = (num_hitables + threads_per_block - 1) / threads_per_block;
+    instantiate_spheres<<<blocks_per_grid, threads_per_block>>>(d_sphere_data, num_hitables, d_list);
+    checkCudaErrors(cudaGetLastError());
+    checkCudaErrors(cudaDeviceSynchronize());
+
+    // Copy BVH nodes to device
+    BVHNodeData *d_nodes;
+    checkCudaErrors(cudaMalloc((void**)&d_nodes, nodes.size() * sizeof(BVHNodeData)));
+    checkCudaErrors(cudaMemcpy(d_nodes, nodes.data(), nodes.size() * sizeof(BVHNodeData), cudaMemcpyHostToDevice));
+
+    // World and camera
     hitable **d_world;
     checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hitable *)));
     camera **d_camera;
     checkCudaErrors(cudaMalloc((void **)&d_camera, sizeof(camera *)));
-    create_world<<<1,1>>>(d_list, d_world, d_camera, nx, ny, d_rand_state2);
+    create_world_from_flat<<<1,1>>>(d_nodes, static_cast<int>(nodes.size()), d_list, d_world);
+    checkCudaErrors(cudaGetLastError());
+    checkCudaErrors(cudaDeviceSynchronize());
+    create_camera_kernel<<<1,1>>>(d_camera, nx, ny);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
 
@@ -212,13 +294,15 @@ int main() {
 
     // clean up
     checkCudaErrors(cudaDeviceSynchronize());
-    free_world<<<1,1>>>(d_list,d_world,d_camera);
+    free_world<<<1,1>>>(d_list, num_hitables, d_world, d_camera);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaFree(d_camera));
     checkCudaErrors(cudaFree(d_world));
     checkCudaErrors(cudaFree(d_list));
+    checkCudaErrors(cudaFree(d_nodes));
+    checkCudaErrors(cudaFree(d_sphere_data));
     checkCudaErrors(cudaFree(d_rand_state));
-    checkCudaErrors(cudaFree(d_rand_state2));
+    checkCudaErrors(cudaFree(d_sphere_count));
     checkCudaErrors(cudaFree(fb));
 
     cudaDeviceReset();
