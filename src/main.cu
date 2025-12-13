@@ -152,6 +152,9 @@ int main() {
     std::cerr << "Rendering a " << nx << "x" << ny << " image with " << ns << " samples per pixel ";
     std::cerr << "in " << tx << "x" << ty << " blocks.\n";
 
+    clock_t start, stop;
+    start = clock();
+
     int num_pixels = nx*ny;
     size_t fb_size = num_pixels*sizeof(vec3_8bit);
 
@@ -182,8 +185,6 @@ int main() {
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
 
-    clock_t start, stop;
-    start = clock();
     // Render our buffer
     dim3 blocks(nx/tx+1,ny/ty+1);
     dim3 threads(tx,ty);
