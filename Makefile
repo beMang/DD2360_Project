@@ -16,6 +16,7 @@ NVCCFLAGS  = $(NVCC_DBG) -m64 $(ARCH_FLAGS) -O3 -use_fast_math
 # Directories
 # --------------------------------------------------------------
 SRC_DIR = src
+REF_SRC_DIR = ref_src
 BIN_DIR = bin
 
 # Sources, headers, objects
@@ -24,13 +25,17 @@ INCS = $(wildcard $(SRC_DIR)/*.h)
 OBJS = $(patsubst $(SRC_DIR)/%.cu,$(BIN_DIR)/%.o,$(SRCS))
 
 TARGET = $(BIN_DIR)/cudart
+REF = $(BIN_DIR)/cudart_ref
 
 # --------------------------------------------------------------
 # Build executable
 # --------------------------------------------------------------
-all: $(BIN_DIR) $(TARGET)
+all: $(BIN_DIR) $(TARGET) $(REF)
 
 $(TARGET): $(OBJS)
+	$(NVCC) $(NVCCFLAGS) -o $@ $^
+
+$(REF): $(patsubst $(SRC_DIR)/%.cu,$(REF_SRC_DIR)/%.cu,$(SRCS))
 	$(NVCC) $(NVCCFLAGS) -o $@ $^
 
 # --------------------------------------------------------------
