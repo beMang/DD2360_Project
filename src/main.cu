@@ -14,7 +14,7 @@
 #include "material.h"
 #include "util.h"
 
-__global__ void generate_scene_data(SphereData* spheres, int* out_count) {
+__global__ void generate_scene_data(SphereData* spheres, int* n_obj) {
     if (threadIdx.x == 0 && blockIdx.x == 0) {
         curandState rand_state;
         curand_init(1984, 0, 0, &rand_state);
@@ -23,8 +23,12 @@ __global__ void generate_scene_data(SphereData* spheres, int* out_count) {
         // Ground
         spheres[idx++] = {vec3(0,-1000.0f,-1), 1000.0f, 0, vec3(0.5f, 0.5f, 0.5f), 0.0f, 1.0f};
 
-        for(int a = -11; a < 11; a++) {
-            for(int b = -11; b < 11; b++) {
+        int loop_size = *n_obj - 4;
+        int grid_size = static_cast<int>(sqrtf(static_cast<float>(loop_size)));
+        int half_grid = grid_size / 2;
+
+        for(int a = -half_grid; a < half_grid; a++) {
+            for(int b = -half_grid; b < half_grid; b++) {
                 float choose_mat = curand_uniform(&rand_state);
                 vec3 center(a + curand_uniform(&rand_state), 0.2f, b + curand_uniform(&rand_state));
                 if(choose_mat < 0.8f) {
@@ -50,7 +54,7 @@ __global__ void generate_scene_data(SphereData* spheres, int* out_count) {
         spheres[idx++] = {vec3(-4,1,0), 1.0f, 0, vec3(0.4f,0.2f,0.1f), 0.0f, 1.0f};
         spheres[idx++] = {vec3(4,1,0), 1.0f, 1, vec3(0.7f,0.6f,0.5f), 0.0f, 1.0f};
 
-        *out_count = idx;
+        *n_obj = idx;
     }
 }
 // limited version of checkCudaErrors from helper_cuda.h in CUDA examples
@@ -131,8 +135,6 @@ __global__ void render(vec3_8bit *fb, int max_x, int max_y, int ns, camera **cam
     fb[pixel_index] = vec3_8bit(static_cast<u_int8_t>(255.99f*col[0]), static_cast<u_int8_t>(255.99f*col[1]), static_cast<u_int8_t>(255.99f*col[2]));
 }
 
-#define RND (curand_uniform(&local_rand_state))
-
 __global__ void instantiate_spheres(const SphereData* sphere_data, int n, hitable **d_list) {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
     if (idx >= n) return;
@@ -172,22 +174,29 @@ __global__ void create_camera_kernel(camera **d_camera, int nx, int ny) {
 }
 
 __global__ void free_world(hitable **d_list, int count, hitable **d_world, camera **d_camera) {
-    for(int i = 0; i < count; i++) {
-        delete ((sphere *)d_list[i])->mat_ptr;
-        delete d_list[i];
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx < count) {
+        delete ((sphere *)d_list[idx])->mat_ptr;
+        delete d_list[idx];
     }
-    delete *d_world;
-    delete *d_camera;
+    if (idx == 0 && blockIdx.x == 0) {
+        delete *d_world;
+        delete *d_camera;
+    }
 }
 
-int main() {
+//number of objects in arguments
+int main(int argc, char** argv) {
     int nx = 1200;
     int ny = 800;
     int ns = 10;
     int tx = 8;
     int ty = 8;
+    int n_obj = 22*22 + 4;
 
-    std::cerr << "Rendering a " << nx << "x" << ny << " image with " << ns << " samples per pixel ";
+    if (argc > 1) n_obj = atoi(argv[1]);
+
+    std::cerr << "Rendering a " << nx << "x" << ny << " image with " << ns << " samples per pixel\n";
     std::cerr << "in " << tx << "x" << ty << " blocks.\n";
 
     clock_t start, stop;
@@ -205,32 +214,32 @@ int main() {
     checkCudaErrors(cudaMalloc((void **)&d_rand_state, num_pixels*sizeof(curandState)));
 
     // Build scene on GPU using original curand sequence, then pull to host for BVH build
-    const int max_spheres = 22*22 + 4;
     SphereData *d_sphere_data;
-    checkCudaErrors(cudaMalloc((void**)&d_sphere_data, max_spheres * sizeof(SphereData)));
-    int *d_sphere_count;
-    checkCudaErrors(cudaMalloc((void**)&d_sphere_count, sizeof(int)));
-    generate_scene_data<<<1,1>>>(d_sphere_data, d_sphere_count);
+    checkCudaErrors(cudaMalloc((void**)&d_sphere_data, n_obj * sizeof(SphereData)));
+    int *d_n_obj;
+    checkCudaErrors(cudaMalloc((void**)&d_n_obj, sizeof(int)));
+    checkCudaErrors(cudaMemcpy(d_n_obj, &n_obj, sizeof(int), cudaMemcpyHostToDevice));
+    generate_scene_data<<<1,1>>>(d_sphere_data, d_n_obj);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
 
-    int num_hitables = 0;
-    checkCudaErrors(cudaMemcpy(&num_hitables, d_sphere_count, sizeof(int), cudaMemcpyDeviceToHost));
-    std::vector<SphereData> spheres(num_hitables);
-    checkCudaErrors(cudaMemcpy(spheres.data(), d_sphere_data, num_hitables * sizeof(SphereData), cudaMemcpyDeviceToHost));
+    checkCudaErrors(cudaMemcpy(&n_obj, d_n_obj, sizeof(int), cudaMemcpyDeviceToHost));
+    printf("Generated %d spheres.\n", n_obj);
+    std::vector<SphereData> spheres(n_obj);
+    checkCudaErrors(cudaMemcpy(spheres.data(), d_sphere_data, n_obj * sizeof(SphereData), cudaMemcpyDeviceToHost));
 
-    std::vector<int> prim_indices(num_hitables);
-    std::vector<aabb> prim_boxes(num_hitables);
-    for (int i = 0; i < num_hitables; i++) prim_indices[i] = i;
-    for (int i = 0; i < num_hitables; i++) prim_boxes[i] = box_for_sphere(spheres[i]);
+    std::vector<int> prim_indices(n_obj);
+    std::vector<aabb> prim_boxes(n_obj);
+    for (int i = 0; i < n_obj; i++) prim_indices[i] = i;
+    for (int i = 0; i < n_obj; i++) prim_boxes[i] = box_for_sphere(spheres[i]);
     std::vector<BVHNodeData> nodes;
-    nodes.reserve(2 * num_hitables);
-    build_sah_bvh(prim_indices, 0, num_hitables, spheres, prim_boxes, nodes, 4);
+    nodes.reserve(2 * n_obj);
+    build_sah_bvh(prim_indices, 0, n_obj, spheres, prim_boxes, nodes, 4);
 
     // Reorder sphere array to match the final BVH leaf ordering (prim_indices now holds the permutation).
     {
-        std::vector<SphereData> reordered(num_hitables);
-        for (int i = 0; i < num_hitables; i++) {
+        std::vector<SphereData> reordered(n_obj);
+        for (int i = 0; i < n_obj; i++) {
             reordered[i] = spheres[prim_indices[i]];
         }
         spheres.swap(reordered);
@@ -241,12 +250,12 @@ int main() {
 
     // Allocate device list of primitives
     hitable **d_list;
-    checkCudaErrors(cudaMalloc((void **)&d_list, num_hitables*sizeof(hitable *)));
+    checkCudaErrors(cudaMalloc((void **)&d_list, n_obj*sizeof(hitable *)));
 
     // Instantiate spheres + materials on device
     int threads_per_block = 128;
-    int blocks_per_grid = (num_hitables + threads_per_block - 1) / threads_per_block;
-    instantiate_spheres<<<blocks_per_grid, threads_per_block>>>(d_sphere_data, num_hitables, d_list);
+    int blocks_per_grid = (n_obj + threads_per_block - 1) / threads_per_block;
+    instantiate_spheres<<<blocks_per_grid, threads_per_block>>>(d_sphere_data, n_obj, d_list);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
 
@@ -294,7 +303,7 @@ int main() {
 
     // clean up
     checkCudaErrors(cudaDeviceSynchronize());
-    free_world<<<1,1>>>(d_list, num_hitables, d_world, d_camera);
+    free_world<<<blocks_per_grid, threads_per_block>>>(d_list, n_obj, d_world, d_camera);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaFree(d_camera));
     checkCudaErrors(cudaFree(d_world));
@@ -302,7 +311,6 @@ int main() {
     checkCudaErrors(cudaFree(d_nodes));
     checkCudaErrors(cudaFree(d_sphere_data));
     checkCudaErrors(cudaFree(d_rand_state));
-    checkCudaErrors(cudaFree(d_sphere_count));
     checkCudaErrors(cudaFree(fb));
 
     cudaDeviceReset();
