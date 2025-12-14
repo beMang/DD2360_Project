@@ -157,6 +157,7 @@ int main(int argc, char** argv) {
     int n_obj  = 22*22+1+3;
 
     if (argc > 1) n_obj = atoi(argv[1]);
+    if (argc > 2) ns = atoi(argv[2]);
 
     std::cerr << "Rendering a " << nx << "x" << ny << " image with " << ns << " samples per pixel ";
     std::cerr << "in " << tx << "x" << ty << " blocks.\n";
