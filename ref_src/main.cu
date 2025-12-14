@@ -15,7 +15,7 @@
 
 void check_cuda(cudaError_t result, char const *const func, const char *const file, int const line) {
     if (result) {
-        std::cerr << "CUDA error = " << static_cast<unsigned int>(result) << " at " <<
+        std::cout << "CUDA error = " << static_cast<unsigned int>(result) << " at " <<
             file << ":" << line << " '" << func << "' \n";
         // Make sure we call CUDA Device Reset before exiting
         cudaDeviceReset();
@@ -159,8 +159,8 @@ int main(int argc, char** argv) {
     if (argc > 1) n_obj = atoi(argv[1]);
     if (argc > 2) ns = atoi(argv[2]);
 
-    std::cerr << "Rendering a " << nx << "x" << ny << " image with " << ns << " samples per pixel ";
-    std::cerr << "in " << tx << "x" << ty << " blocks.\n";
+    std::cout << "Rendering a " << nx << "x" << ny << " image with " << ns << " samples per pixel ";
+    std::cout << "in " << tx << "x" << ty << " blocks.\n";
 
     clock_t start, stop;
     start = clock();
@@ -209,10 +209,10 @@ int main(int argc, char** argv) {
     checkCudaErrors(cudaDeviceSynchronize());
     stop = clock();
     double timer_seconds = ((double)(stop - start)) / CLOCKS_PER_SEC;
-    std::cerr << "took " << timer_seconds << " seconds with " << n_obj << " objects.\n";
+    std::cout << "took " << timer_seconds << " seconds with " << n_obj << " objects.\n";
 
     // output FB as ppm image in file
-    saveFramebufferAsPPM("ref_image.ppm", fb, nx, ny);
+    saveFramebufferAsPPM("tmp/ref_image.ppm", fb, nx, ny);
 
     // clean up
     checkCudaErrors(cudaDeviceSynchronize());

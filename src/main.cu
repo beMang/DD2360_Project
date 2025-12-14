@@ -189,7 +189,7 @@ __global__ void free_world(hitable **d_list, int count, hitable **d_world, camer
 int main(int argc, char** argv) {
     int nx = 1200;
     int ny = 800;
-    int ns = 30;
+    int ns = 10;
     int tx = 8;
     int ty = 8;
     int n_obj = 22*22 + 4;
@@ -197,8 +197,8 @@ int main(int argc, char** argv) {
     if (argc > 1) n_obj = atoi(argv[1]);
     if (argc > 2) ns = atoi(argv[2]);
 
-    std::cerr << "Rendering a " << nx << "x" << ny << " image with " << ns << " samples per pixel\n";
-    std::cerr << "in " << tx << "x" << ty << " blocks.\n";
+    std::cout << "Rendering a " << nx << "x" << ny << " image with " << ns << " samples per pixel\n";
+    std::cout << "in " << tx << "x" << ty << " blocks.\n";
 
     clock_t start, stop;
     start = clock();
@@ -288,20 +288,21 @@ int main(int argc, char** argv) {
     checkCudaErrors(cudaDeviceSynchronize());
     stop = clock();
     double timer_seconds = ((double)(stop - start)) / CLOCKS_PER_SEC;
-    std::cerr << "took " << timer_seconds << " seconds with " << n_obj << " objects.\n";
+    std::cout << "took " << timer_seconds << " seconds with " << n_obj << " objects.\n";
 
     // output FB as ppm image in file
-    saveFramebufferAsPPM("image.ppm", fb, nx, ny);
+    std::string output_image_filename = "tmp/image.ppm";
+    saveFramebufferAsPPM(output_image_filename.c_str(), fb, nx, ny);
 
     // Compute and prints metrics
     //use string for filename
-    std::string ref_image_filename = "ref_image.ppm";
-    float mse = MSE_error("image.ppm", ref_image_filename.c_str());
+    std::string ref_image_filename = "tmp/ref.ppm";
+    float mse = MSE_error(output_image_filename.c_str(), ref_image_filename.c_str());
     printf("Mean Squared Error (MSE) between frames: %f %%\n", 100*mse);
     double psnr = 10.0 * log10(1.0 / mse);
     printf("Peak Signal-to-Noise Ratio (PSNR): %f dB\n", psnr);
 
-    float ssim = SSIM_error("image.ppm", ref_image_filename.c_str(), nx, ny);
+    float ssim = SSIM_error(output_image_filename.c_str(), ref_image_filename.c_str(), nx, ny);
     printf("Structural Similarity Index (SSIM) between frames: %f %%\n", 100*ssim);
 
     // clean up
