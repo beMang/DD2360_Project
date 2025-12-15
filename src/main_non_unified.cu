@@ -154,9 +154,12 @@ int main() {
     int num_pixels = nx*ny;
     size_t fb_size = num_pixels*sizeof(vec3);
 
-    // allocate FB
+    // allocate FB 
+    //K: Lets try this with standard memory allocation procedures
     vec3 *fb;
-    checkCudaErrors(cudaMallocManaged((void **)&fb, fb_size));
+    vec3 *frameBuffer;
+    frameBuffer = (vec3*)malloc(fb_size);
+    checkCudaErrors(cudaMalloc((void **)&fb, fb_size));
 
     // allocate random state
     curandState *d_rand_state;
@@ -196,14 +199,15 @@ int main() {
     double timer_seconds = ((double)(stop - start)) / CLOCKS_PER_SEC;
     std::cerr << "took " << timer_seconds << " seconds.\n";
 
+    cudaMemcpy(frameBuffer, fb, fb_size, cudaMemcpyDeviceToHost);
     // Output FB as Image
     std::cout << "P3\n" << nx << " " << ny << "\n255\n";
     for (int j = ny-1; j >= 0; j--) {
         for (int i = 0; i < nx; i++) {
             size_t pixel_index = j*nx + i;
-            int ir = int(255.99*fb[pixel_index].r());
-            int ig = int(255.99*fb[pixel_index].g());
-            int ib = int(255.99*fb[pixel_index].b());
+            int ir = int(255.99*frameBuffer[pixel_index].r());
+            int ig = int(255.99*frameBuffer[pixel_index].g());
+            int ib = int(255.99*frameBuffer[pixel_index].b());
             std::cout << ir << " " << ig << " " << ib << "\n";
         }
     }

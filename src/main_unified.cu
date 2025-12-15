@@ -156,13 +156,13 @@ int main() {
 
     // allocate FB
     vec3 *fb;
-    checkCudaErrors(cudaMallocManaged((void **)&fb, fb_size));
+    checkCudaErrors(cudaMallocManaged((void **)&fb, fb_size)); //K: code uses unified approach to create frame buffer
 
     // allocate random state
     curandState *d_rand_state;
-    checkCudaErrors(cudaMalloc((void **)&d_rand_state, num_pixels*sizeof(curandState)));
+    checkCudaErrors(cudaMalloc((void **)&d_rand_state, num_pixels*sizeof(curandState))); //regular malloc
     curandState *d_rand_state2;
-    checkCudaErrors(cudaMalloc((void **)&d_rand_state2, 1*sizeof(curandState)));
+    checkCudaErrors(cudaMalloc((void **)&d_rand_state2, 1*sizeof(curandState))); //regular malloc
 
     // we need that 2nd random state to be initialized for the world creation
     rand_init<<<1,1>>>(d_rand_state2);
