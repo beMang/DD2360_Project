@@ -1,5 +1,8 @@
 #include <iostream>
+#include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
+#include <sys/time.h>
 #include <float.h>
 #include <curand_kernel.h>
 #include "vec3.h"
@@ -8,6 +11,13 @@
 #include "hitable_list.h"
 #include "camera.h"
 #include "material.h"
+
+double cpuSecond()
+{
+    struct timeval tp;
+    gettimeofday(&tp, NULL);
+    return ((double)tp.tv_sec + (double)tp.tv_usec * 1.e-6);
+}
 
 // limited version of checkCudaErrors from helper_cuda.h in CUDA examples
 #define checkCudaErrors(val) check_cuda( (val), #val, __FILE__, __LINE__ )
@@ -141,10 +151,16 @@ __global__ void free_world(hitable **d_list, hitable **d_world, camera **d_camer
     delete *d_camera;
 }
 
-int main() {
-    int nx = 1200;
-    int ny = 800;
-    int ns = 10;
+int main(int argc, char* argv[]) {
+    if (argc != 4) {
+        std::cerr << "Usage: " << argv[0] << " <nx> <ny> <ns>\n";
+        return 1;
+    }
+
+    int nx = std::atoi(argv[1]);
+    int ny = std::atoi(argv[2]);
+    int ns = std::atoi(argv[3]);
+
     int tx = 8;
     int ty = 8;
 
@@ -197,9 +213,8 @@ int main() {
     checkCudaErrors(cudaDeviceSynchronize());
     stop = clock();
     double timer_seconds = ((double)(stop - start)) / CLOCKS_PER_SEC;
-    std::cerr << "took " << timer_seconds << " seconds.\n";
-
     cudaMemcpy(frameBuffer, fb, fb_size, cudaMemcpyDeviceToHost);
+    std::cerr << "took " << timer_seconds << " seconds.\n";
     // Output FB as Image
     std::cout << "P3\n" << nx << " " << ny << "\n255\n";
     for (int j = ny-1; j >= 0; j--) {
