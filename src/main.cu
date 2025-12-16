@@ -13,6 +13,9 @@
 #include "camera.h"
 #include "material.h"
 #include "util.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/time.h>
 
 __global__ void generate_scene_data(SphereData* spheres, int* n_obj) {
     if (threadIdx.x == 0 && blockIdx.x == 0) {
@@ -186,16 +189,24 @@ __global__ void free_world(hitable **d_list, int count, hitable **d_world, camer
 }
 
 //number of objects in arguments
-int main(int argc, char** argv) {
-    int nx = 1200;
-    int ny = 800;
-    int ns = 10;
+int main(int argc, char* argv[]) {
+    if (argc <= 4) {
+        std::cerr << "Usage: " << argv[0] << " <nx> <ny> <ns> <n_obj>\n";
+        return 1;
+    }
+
+    int nx = std::atoi(argv[1]);
+    int ny = std::atoi(argv[2]);
+    int ns = std::atoi(argv[3]);
+
     int tx = 8;
     int ty = 8;
     int n_obj = 22*22 + 4;
 
-    if (argc > 1) n_obj = atoi(argv[1]);
-    if (argc > 2) ns = atoi(argv[2]);
+    if (argc == 5) n_obj = atoi(argv[1]);
+    else if (argc > 5) {
+        std::cerr << "Too many input variables! \n";
+    }
 
     std::cout << "Rendering a " << nx << "x" << ny << " image with " << ns << " samples per pixel\n";
     std::cout << "in " << tx << "x" << ty << " blocks.\n";
