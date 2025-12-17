@@ -85,14 +85,6 @@ __device__ vec3 color(const ray& r, hitable **world, curandState *local_rand_sta
     return vec3(0.0,0.0,0.0); // exceeded recursion
 }
 
-__global__ void render_init(int max_x, int max_y, curandState *rand_state) {
-    int i = threadIdx.x + blockIdx.x * blockDim.x;
-    int j = threadIdx.y + blockIdx.y * blockDim.y;
-    if((i >= max_x) || (j >= max_y)) return;
-    int pixel_index = j*max_x + i;
-    curand_init(1984+pixel_index, 0, 0, &rand_state[pixel_index]);
-}
-
 __global__ void render(vec3_8bit *fb, int max_x, int max_y, int ns, camera **cam, hitable **world, curandState *rand_state) {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     int j = threadIdx.y + blockIdx.y * blockDim.y;
@@ -114,8 +106,10 @@ __global__ void render(vec3_8bit *fb, int max_x, int max_y, int ns, camera **cam
     fb[pixel_index] = vec3_8bit(static_cast<u_int8_t>(255.99f*col[0]), static_cast<u_int8_t>(255.99f*col[1]), static_cast<u_int8_t>(255.99f*col[2]));
 }
 
-__global__ void create_world_from_flat(const BVHNodeData* nodes, int node_count, hitable **d_list, hitable **d_world, camera **d_camera, int nx, int ny) {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
+__global__ void render_init(const BVHNodeData* nodes, int node_count, hitable **d_list, hitable **d_world, camera **d_camera, int nx, int ny, curandState *rand_state) {
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    int j = threadIdx.y + blockIdx.y * blockDim.y;
+    if (i == 0 && j == 0) {
         *d_world = new bvh_flat_world(nodes, node_count, d_list);
 
         vec3 lookfrom(13,2,3);
@@ -130,6 +124,10 @@ __global__ void create_world_from_flat(const BVHNodeData* nodes, int node_count,
                                  aperture,
                                  dist_to_focus);
     }
+
+    if((i >= nx) || (j >= ny)) return;
+    int pixel_index = j*nx + i;
+    curand_init(1984+pixel_index, 0, 0, &rand_state[pixel_index]);
 }
 
 __global__ void free_world(hitable **d_list, int count, hitable **d_world, camera **d_camera) {

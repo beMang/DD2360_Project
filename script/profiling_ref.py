@@ -60,14 +60,14 @@ else:
 # plot bar chart with stacked bars for each number of objects
 labels = [str(n) for n in n_obj_accurate]
 x = range(len(labels))
-plt.bar(x, rand_init_time, label='Random Init')
-plt.bar(x, create_world_time, bottom=rand_init_time, label='Create World')
+plt.bar(x, rand_init_time, label='Memory allocation')
+plt.bar(x, create_world_time, bottom=rand_init_time, label='World allocation')
 bottoms = [i+j for i,j in zip(rand_init_time, create_world_time)]
-plt.bar(x, render_time, bottom=bottoms, label='Render')
+plt.bar(x, render_time, bottom=bottoms, label='Rendering')
 bottoms = [i+j for i,j in zip(bottoms, render_time)]
-plt.bar(x, save_image_time, bottom=bottoms, label='Save Image')
+plt.bar(x, save_image_time, bottom=bottoms, label='Image saving')
 bottoms = [i+j for i,j in zip(bottoms, save_image_time)]
-plt.bar(x, free_cuda_time, bottom=bottoms, label='Free CUDA')
+plt.bar(x, free_cuda_time, bottom=bottoms, label='Ressource freeing')
 plt.xticks(x, labels)
 plt.xlabel('Number of Objects')
 plt.ylabel('Time (s)')

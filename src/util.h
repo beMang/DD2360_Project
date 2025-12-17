@@ -154,6 +154,6 @@ float SSIM_error(const char* file1, const char* file2, int width, int height){
 
 void inline measure_time(clock_t* start, clock_t* stop, const char* label) {
     *stop = clock();
-    printf("%s: %f sec\n", label, ((double)(*stop - *start)) / CLOCKS_PER_SEC);
+    printf("\t %f sec for %s\n", ((double)(*stop - *start)) / CLOCKS_PER_SEC, label);
     *start = clock();
 }
