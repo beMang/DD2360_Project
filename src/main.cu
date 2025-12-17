@@ -28,47 +28,43 @@ __global__ void reorder_hitables(hitable** src, hitable** dst, int* indices, int
     }
 }
 
-__global__ void generate_scene_data(hitable** d_list, int* n_obj) {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
+__global__ void generate_scene_data(hitable** d_list, int grid_size) {
+    int xid = threadIdx.x + blockIdx.x * blockDim.x;
+    int yid = threadIdx.y + blockIdx.y * blockDim.y;
+
+    if (xid == 0 && yid == 0) {
+        d_list[0] = new sphere(vec3(0,-1000.0f,-1), 1000.0f, new lambertian(vec3(0.5f, 0.5f, 0.5f))); // ground
+        //3 bigger sphere
+        d_list[1] = new sphere(vec3(0,1,0), 1.0f, new dielectric(1.5f));
+        d_list[2] = new sphere(vec3(-4,1,0), 1.0f, new lambertian(vec3(0.4f,0.2f,0.1f)));
+        d_list[3] = new sphere(vec3(4,1,0), 1.0f, new metal(vec3(0.7f,0.6f,0.5f), 0.0f));
+    }
+
+    if(xid < grid_size && yid < grid_size) {
+        int half_grid = grid_size/2;
+        int id = xid + yid*grid_size +4;
+
         curandState rand_state;
-        curand_init(1984, 0, 0, &rand_state);
-
-        int idx = 0;
-        // Ground (create a sphere) with parameters : {vec3(0,-1000.0f,-1), 1000.0f, 0, vec3(0.5f, 0.5f, 0.5f), 0.0f, 1.0f};
-        d_list[idx++] = new sphere(vec3(0,-1000.0f,-1), 1000.0f, new lambertian(vec3(0.5f, 0.5f, 0.5f)));
-
-        int loop_size = *n_obj - 4;
-        int grid_size = static_cast<int>(sqrtf(static_cast<float>(loop_size)));
-        int half_grid = grid_size / 2;
-
-        for(int a = -half_grid; a < half_grid; a++) {
-            for(int b = -half_grid; b < half_grid; b++) {
-                float choose_mat = curand_uniform(&rand_state);
-                vec3 center(a + curand_uniform(&rand_state), 0.2f, b + curand_uniform(&rand_state));
-                if(choose_mat < 0.8f) {
-                    vec3 albedo(curand_uniform(&rand_state)*curand_uniform(&rand_state),
-                                curand_uniform(&rand_state)*curand_uniform(&rand_state),
-                                curand_uniform(&rand_state)*curand_uniform(&rand_state));
-                    d_list[idx++] = new sphere(center, 0.2f, new lambertian(albedo));
-                }
-                else if(choose_mat < 0.95f) {
-                    vec3 albedo(0.5f*(1.0f+curand_uniform(&rand_state)),
-                                0.5f*(1.0f+curand_uniform(&rand_state)),
-                                0.5f*(1.0f+curand_uniform(&rand_state)));
-                    float fuzz = 0.5f * curand_uniform(&rand_state);
-                    d_list[idx++] = new sphere(center, 0.2f, new metal(albedo, fuzz));
-                }
-                else {
-                    d_list[idx++] = new sphere(center, 0.2f, new dielectric(1.5f));
-                }
-            }
+        curand_init(1984 + id, 0, 0, &rand_state);
+        
+        float choose_mat = curand_uniform(&rand_state);
+        vec3 center(xid - half_grid + curand_uniform(&rand_state), 0.2f, yid - half_grid + curand_uniform(&rand_state));
+        if(choose_mat < 0.8f) {
+            vec3 albedo(curand_uniform(&rand_state)*curand_uniform(&rand_state),
+                        curand_uniform(&rand_state)*curand_uniform(&rand_state),
+                        curand_uniform(&rand_state)*curand_uniform(&rand_state));
+            d_list[id] = new sphere(center, 0.2f, new lambertian(albedo));
         }
-
-        d_list[idx++] = new sphere(vec3(0,1,0), 1.0f, new dielectric(1.5f));
-        d_list[idx++] = new sphere(vec3(-4,1,0), 1.0f, new lambertian(vec3(0.4f,0.2f,0.1f)));
-        d_list[idx++] = new sphere(vec3(4,1,0), 1.0f, new metal(vec3(0.7f,0.6f,0.5f), 0.0f));
-
-        *n_obj = idx;
+        else if(choose_mat < 0.95f) {
+            vec3 albedo(0.5f*(1.0f+curand_uniform(&rand_state)),
+                        0.5f*(1.0f+curand_uniform(&rand_state)),
+                        0.5f*(1.0f+curand_uniform(&rand_state)));
+            float fuzz = 0.5f * curand_uniform(&rand_state);
+            d_list[id] = new sphere(center, 0.2f, new metal(albedo, fuzz));
+        }
+        else {
+            d_list[id] = new sphere(center, 0.2f, new dielectric(1.5f));
+        }
     }
 }
 // limited version of checkCudaErrors from helper_cuda.h in CUDA examples
@@ -112,12 +108,6 @@ __device__ vec3 color(const ray& r, hitable **world, curandState *local_rand_sta
         }
     }
     return vec3(0.0,0.0,0.0); // exceeded recursion
-}
-
-__global__ void rand_init(curandState *rand_state) {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        curand_init(1984, 0, 0, rand_state);
-    }
 }
 
 __global__ void render_init(int max_x, int max_y, curandState *rand_state) {
@@ -212,17 +202,17 @@ int main(int argc, char** argv) {
     curandState *d_rand_state;
     checkCudaErrors(cudaMalloc((void **)&d_rand_state, num_pixels*sizeof(curandState)));
 
+    // Compute grid size needed for generating scene
+    int grid_size = static_cast<int>(sqrtf(static_cast<float>(n_obj - 4)));
+    int gen_block_size = 32;
+    n_obj = grid_size * grid_size + 4; // adjust n_obj to match grid
+
     // Build scene on GPU using original curand sequence, then pull to host for BVH build
     hitable **d_hitable;
     checkCudaErrors(cudaMalloc((void**)&d_hitable, n_obj * sizeof(hitable*)));
-    int *d_n_obj;
-    checkCudaErrors(cudaMalloc((void**)&d_n_obj, sizeof(int)));
-    checkCudaErrors(cudaMemcpy(d_n_obj, &n_obj, sizeof(int), cudaMemcpyHostToDevice));
-    generate_scene_data<<<1,1>>>(d_hitable, d_n_obj);
+    generate_scene_data<<<dim3(grid_size/gen_block_size+1, grid_size/gen_block_size+1),dim3(gen_block_size,gen_block_size)>>>(d_hitable, grid_size);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
-
-    checkCudaErrors(cudaMemcpy(&n_obj, d_n_obj, sizeof(int), cudaMemcpyDeviceToHost));
     printf("Generated %d spheres.\n", n_obj);
 
     std::vector<int> prim_indices(n_obj);

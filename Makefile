@@ -26,16 +26,22 @@ OBJS = $(patsubst $(SRC_DIR)/%.cu,$(BIN_DIR)/%.o,$(SRCS))
 
 TARGET = $(BIN_DIR)/cudart
 REF = $(BIN_DIR)/cudart_ref
+REF_B = $(BIN_DIR)/cudart_ref2
 
 # --------------------------------------------------------------
 # Build executable
 # --------------------------------------------------------------
-all: $(BIN_DIR) $(TARGET) $(REF)
+all: $(BIN_DIR) $(TARGET) $(REF) $(REF_B)
 
 $(TARGET): $(OBJS)
 	$(NVCC) $(NVCCFLAGS) -o $@ $^
 
-$(REF): $(patsubst $(SRC_DIR)/%.cu,$(REF_SRC_DIR)/%.cu,$(SRCS))
+# Ref should compile main.cu in ref_src/
+$(REF): $(REF_SRC_DIR)/main.cu
+	$(NVCC) $(NVCCFLAGS) -o $@ $^
+
+# Ref2 should compile main_parallel_gen.cu in ref_src/
+$(REF_B): $(REF_SRC_DIR)/main_parallel_gen.cu
 	$(NVCC) $(NVCCFLAGS) -o $@ $^
 
 # --------------------------------------------------------------
