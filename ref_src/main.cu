@@ -148,6 +148,12 @@ __global__ void free_world(hitable **d_list, hitable **d_world, camera **d_camer
     delete *d_camera;
 }
 
+void inline measure_time(clock_t* start, clock_t* stop, const char* label) {
+    *stop = clock();
+    printf("%s: %f sec\n", label, ((double)(*stop - *start)) / CLOCKS_PER_SEC);
+    *start = clock();
+}
+
 int main(int argc, char** argv) {
     int nx = 1200;
     int ny = 800;
@@ -163,7 +169,9 @@ int main(int argc, char** argv) {
     std::cout << "in " << tx << "x" << ty << " blocks.\n";
 
     clock_t start, stop;
+    clock_t p_start, p_stop;
     start = clock();
+    p_start = clock();
 
     int num_pixels = nx*ny;
     size_t fb_size = num_pixels*sizeof(vec3);
@@ -182,6 +190,7 @@ int main(int argc, char** argv) {
     rand_init<<<1,1>>>(d_rand_state2);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
+    measure_time(&p_start, &p_stop, "rand_init");
 
     // make our world of hitables & the camera
     int* d_n_obj;
@@ -197,6 +206,7 @@ int main(int argc, char** argv) {
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
     checkCudaErrors(cudaMemcpy(&n_obj, d_n_obj, sizeof(int), cudaMemcpyDeviceToHost));
+    measure_time(&p_start, &p_stop, "create_world");
 
     // Render our buffer
     dim3 blocks(nx/tx+1,ny/ty+1);
@@ -208,11 +218,13 @@ int main(int argc, char** argv) {
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
     stop = clock();
+    measure_time(&p_start, &p_stop, "render");
     double timer_seconds = ((double)(stop - start)) / CLOCKS_PER_SEC;
-    std::cout << "took " << timer_seconds << " seconds with " << n_obj << " objects.\n";
+    std::cout << "took " << timer_seconds << " for image gen. seconds with " << n_obj << " objects.\n";
 
     // output FB as ppm image in file
     saveFramebufferAsPPM("tmp/ref_image.ppm", fb, nx, ny);
+    measure_time(&p_start, &p_stop, "save_image");
 
     // clean up
     checkCudaErrors(cudaDeviceSynchronize());
@@ -225,6 +237,7 @@ int main(int argc, char** argv) {
     checkCudaErrors(cudaFree(d_rand_state2));
     checkCudaErrors(cudaFree(fb));
     checkCudaErrors(cudaFree(d_n_obj));
-
     cudaDeviceReset();
+    measure_time(&p_start, &p_stop, "free_cuda");
+    return 0;
 }

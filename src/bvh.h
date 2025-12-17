@@ -3,6 +3,9 @@
 
 #include "hitable.h"
 #include "aabb.h"
+#include <vector>
+#include <float.h>
+#include <algorithm>
 
 // POD representation of a BVH node, built on the CPU and copied to the GPU.
 struct BVHNodeData {
