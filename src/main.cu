@@ -14,14 +14,28 @@
 #include "material.h"
 #include "util.h"
 
-__global__ void generate_scene_data(SphereData* spheres, int* n_obj) {
+__global__ void compute_bounding_boxes(hitable** d_list, int n, aabb* out_boxes) {
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx < n) {
+        out_boxes[idx] = d_list[idx]->bounding_box();
+    }
+}
+
+__global__ void reorder_hitables(hitable** src, hitable** dst, int* indices, int n) {
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i < n) {
+        dst[i] = src[indices[i]];
+    }
+}
+
+__global__ void generate_scene_data(hitable** d_list, int* n_obj) {
     if (threadIdx.x == 0 && blockIdx.x == 0) {
         curandState rand_state;
         curand_init(1984, 0, 0, &rand_state);
 
         int idx = 0;
-        // Ground
-        spheres[idx++] = {vec3(0,-1000.0f,-1), 1000.0f, 0, vec3(0.5f, 0.5f, 0.5f), 0.0f, 1.0f};
+        // Ground (create a sphere) with parameters : {vec3(0,-1000.0f,-1), 1000.0f, 0, vec3(0.5f, 0.5f, 0.5f), 0.0f, 1.0f};
+        d_list[idx++] = new sphere(vec3(0,-1000.0f,-1), 1000.0f, new lambertian(vec3(0.5f, 0.5f, 0.5f)));
 
         int loop_size = *n_obj - 4;
         int grid_size = static_cast<int>(sqrtf(static_cast<float>(loop_size)));
@@ -35,24 +49,24 @@ __global__ void generate_scene_data(SphereData* spheres, int* n_obj) {
                     vec3 albedo(curand_uniform(&rand_state)*curand_uniform(&rand_state),
                                 curand_uniform(&rand_state)*curand_uniform(&rand_state),
                                 curand_uniform(&rand_state)*curand_uniform(&rand_state));
-                    spheres[idx++] = {center, 0.2f, 0, albedo, 0.0f, 1.0f};
+                    d_list[idx++] = new sphere(center, 0.2f, new lambertian(albedo));
                 }
                 else if(choose_mat < 0.95f) {
                     vec3 albedo(0.5f*(1.0f+curand_uniform(&rand_state)),
                                 0.5f*(1.0f+curand_uniform(&rand_state)),
                                 0.5f*(1.0f+curand_uniform(&rand_state)));
                     float fuzz = 0.5f * curand_uniform(&rand_state);
-                    spheres[idx++] = {center, 0.2f, 1, albedo, fuzz, 1.0f};
+                    d_list[idx++] = new sphere(center, 0.2f, new metal(albedo, fuzz));
                 }
                 else {
-                    spheres[idx++] = {center, 0.2f, 2, vec3(1.0f,1.0f,1.0f), 0.0f, 1.5f};
+                    d_list[idx++] = new sphere(center, 0.2f, new dielectric(1.5f));
                 }
             }
         }
 
-        spheres[idx++] = {vec3(0,1,0), 1.0f, 2, vec3(1,1,1), 0.0f, 1.5f};
-        spheres[idx++] = {vec3(-4,1,0), 1.0f, 0, vec3(0.4f,0.2f,0.1f), 0.0f, 1.0f};
-        spheres[idx++] = {vec3(4,1,0), 1.0f, 1, vec3(0.7f,0.6f,0.5f), 0.0f, 1.0f};
+        d_list[idx++] = new sphere(vec3(0,1,0), 1.0f, new dielectric(1.5f));
+        d_list[idx++] = new sphere(vec3(-4,1,0), 1.0f, new lambertian(vec3(0.4f,0.2f,0.1f)));
+        d_list[idx++] = new sphere(vec3(4,1,0), 1.0f, new metal(vec3(0.7f,0.6f,0.5f), 0.0f));
 
         *n_obj = idx;
     }
@@ -135,22 +149,6 @@ __global__ void render(vec3_8bit *fb, int max_x, int max_y, int ns, camera **cam
     fb[pixel_index] = vec3_8bit(static_cast<u_int8_t>(255.99f*col[0]), static_cast<u_int8_t>(255.99f*col[1]), static_cast<u_int8_t>(255.99f*col[2]));
 }
 
-__global__ void instantiate_spheres(const SphereData* sphere_data, int n, hitable **d_list) {
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if (idx >= n) return;
-
-    const SphereData& s = sphere_data[idx];
-    material *mat = nullptr;
-    if (s.mat_type == 0) {
-        mat = new lambertian(s.albedo);
-    } else if (s.mat_type == 1) {
-        mat = new metal(s.albedo, s.fuzz);
-    } else {
-        mat = new dielectric(s.ref_idx);
-    }
-    d_list[idx] = new sphere(s.center, s.radius, mat);
-}
-
 __global__ void create_world_from_flat(const BVHNodeData* nodes, int node_count, hitable **d_list, hitable **d_world) {
     if (threadIdx.x == 0 && blockIdx.x == 0) {
         *d_world = new bvh_flat_world(nodes, node_count, d_list);
@@ -215,50 +213,55 @@ int main(int argc, char** argv) {
     checkCudaErrors(cudaMalloc((void **)&d_rand_state, num_pixels*sizeof(curandState)));
 
     // Build scene on GPU using original curand sequence, then pull to host for BVH build
-    SphereData *d_sphere_data;
-    checkCudaErrors(cudaMalloc((void**)&d_sphere_data, n_obj * sizeof(SphereData)));
+    hitable **d_hitable;
+    checkCudaErrors(cudaMalloc((void**)&d_hitable, n_obj * sizeof(hitable*)));
     int *d_n_obj;
     checkCudaErrors(cudaMalloc((void**)&d_n_obj, sizeof(int)));
     checkCudaErrors(cudaMemcpy(d_n_obj, &n_obj, sizeof(int), cudaMemcpyHostToDevice));
-    generate_scene_data<<<1,1>>>(d_sphere_data, d_n_obj);
+    generate_scene_data<<<1,1>>>(d_hitable, d_n_obj);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
 
     checkCudaErrors(cudaMemcpy(&n_obj, d_n_obj, sizeof(int), cudaMemcpyDeviceToHost));
     printf("Generated %d spheres.\n", n_obj);
-    std::vector<SphereData> spheres(n_obj);
-    checkCudaErrors(cudaMemcpy(spheres.data(), d_sphere_data, n_obj * sizeof(SphereData), cudaMemcpyDeviceToHost));
 
     std::vector<int> prim_indices(n_obj);
     std::vector<aabb> prim_boxes(n_obj);
     for (int i = 0; i < n_obj; i++) prim_indices[i] = i;
-    for (int i = 0; i < n_obj; i++) prim_boxes[i] = box_for_sphere(spheres[i]);
-    std::vector<BVHNodeData> nodes;
-    nodes.reserve(2 * n_obj);
-    build_sah_bvh(prim_indices, 0, n_obj, spheres, prim_boxes, nodes, 4);
 
-    // Reorder sphere array to match the final BVH leaf ordering (prim_indices now holds the permutation).
-    {
-        std::vector<SphereData> reordered(n_obj);
-        for (int i = 0; i < n_obj; i++) {
-            reordered[i] = spheres[prim_indices[i]];
-        }
-        spheres.swap(reordered);
-    }
-
-    // Copy sphere data to device (now in BVH order)
-    checkCudaErrors(cudaMemcpy(d_sphere_data, spheres.data(), spheres.size() * sizeof(SphereData), cudaMemcpyHostToDevice));
-
-    // Allocate device list of primitives
-    hitable **d_list;
-    checkCudaErrors(cudaMalloc((void **)&d_list, n_obj*sizeof(hitable *)));
-
-    // Instantiate spheres + materials on device
-    int threads_per_block = 128;
-    int blocks_per_grid = (n_obj + threads_per_block - 1) / threads_per_block;
-    instantiate_spheres<<<blocks_per_grid, threads_per_block>>>(d_sphere_data, n_obj, d_list);
+    // Compute primitive bounding boxes on device and copy to host
+    int tpb_bb = 128;
+    int bpg_bb = (n_obj + tpb_bb - 1) / tpb_bb;
+    aabb *d_prim_boxes = nullptr;
+    checkCudaErrors(cudaMalloc((void**)&d_prim_boxes, n_obj * sizeof(aabb)));
+    compute_bounding_boxes<<<bpg_bb, tpb_bb>>>(d_hitable, n_obj, d_prim_boxes);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
+
+    // Copy bounding boxes to host
+    checkCudaErrors(cudaMemcpy(prim_boxes.data(), d_prim_boxes, n_obj * sizeof(aabb), cudaMemcpyDeviceToHost));
+    checkCudaErrors(cudaFree(d_prim_boxes));
+
+    // Compute BVH on host
+    std::vector<BVHNodeData> nodes;
+    nodes.reserve(2 * n_obj);
+    build_sah_bvh(prim_indices, 0, n_obj, prim_boxes, nodes, 4);
+
+    // Reorder sphere array on GPU to match the final BVH leaf ordering
+    int* d_prim_indices;
+    checkCudaErrors(cudaMalloc((void**)&d_prim_indices, n_obj * sizeof(int)));
+    checkCudaErrors(cudaMemcpy(d_prim_indices, prim_indices.data(), n_obj * sizeof(int), cudaMemcpyHostToDevice));
+    
+    hitable** d_hitable_reordered;
+    checkCudaErrors(cudaMalloc((void**)&d_hitable_reordered, n_obj * sizeof(hitable*)));
+    
+    reorder_hitables<<<bpg_bb, tpb_bb>>>(d_hitable, d_hitable_reordered, d_prim_indices, n_obj);
+    checkCudaErrors(cudaGetLastError());
+    checkCudaErrors(cudaDeviceSynchronize());
+    
+    checkCudaErrors(cudaFree(d_hitable));
+    checkCudaErrors(cudaFree(d_prim_indices));
+    d_hitable = d_hitable_reordered;
 
     // Copy BVH nodes to device
     BVHNodeData *d_nodes;
@@ -270,7 +273,7 @@ int main(int argc, char** argv) {
     checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hitable *)));
     camera **d_camera;
     checkCudaErrors(cudaMalloc((void **)&d_camera, sizeof(camera *)));
-    create_world_from_flat<<<1,1>>>(d_nodes, static_cast<int>(nodes.size()), d_list, d_world);
+    create_world_from_flat<<<1,1>>>(d_nodes, static_cast<int>(nodes.size()), d_hitable, d_world);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
     create_camera_kernel<<<1,1>>>(d_camera, nx, ny);
@@ -307,13 +310,13 @@ int main(int argc, char** argv) {
 
     // clean up
     checkCudaErrors(cudaDeviceSynchronize());
-    free_world<<<blocks_per_grid, threads_per_block>>>(d_list, n_obj, d_world, d_camera);
+    free_world<<<bpg_bb, tpb_bb>>>(d_hitable, n_obj, d_world, d_camera);
     checkCudaErrors(cudaGetLastError());
+    checkCudaErrors(cudaDeviceSynchronize());
     checkCudaErrors(cudaFree(d_camera));
     checkCudaErrors(cudaFree(d_world));
-    checkCudaErrors(cudaFree(d_list));
+    checkCudaErrors(cudaFree(d_hitable));
     checkCudaErrors(cudaFree(d_nodes));
-    checkCudaErrors(cudaFree(d_sphere_data));
     checkCudaErrors(cudaFree(d_rand_state));
     checkCudaErrors(cudaFree(fb));
 

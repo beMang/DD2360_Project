@@ -73,7 +73,6 @@ private:
  * @param prim_indices Indices of primitives to build the BVH for
  * @param start Start index in prim_indices
  * @param end End index in prim_indices
- * @param prims The list of primitives
  * @param prim_boxes The list of primitive bounding boxes
  * @param nodes Output list of BVH nodes
  * @param leaf_size Maximum number of primitives per leaf
@@ -82,7 +81,6 @@ private:
 int build_sah_bvh(std::vector<int>& prim_indices,
                   int start,
                   int end,
-                  const std::vector<SphereData>& prims,
                   const std::vector<aabb> & prim_boxes,
                   std::vector<BVHNodeData>& nodes,
                   int leaf_size = 4) {
@@ -123,14 +121,14 @@ int build_sah_bvh(std::vector<int>& prim_indices,
         std::vector<aabb> prefix(n);
         std::vector<aabb> suffix(n);
 
-        prefix[0] = box_for_sphere(prims[prim_indices[start]]);
+        prefix[0] = prim_boxes[prim_indices[start]];
         for (int i = 1; i < n; i++) {
-            prefix[i] = surrounding_box(prefix[i-1], box_for_sphere(prims[prim_indices[start + i]]));
+            prefix[i] = surrounding_box(prefix[i-1], prim_boxes[prim_indices[start + i]]);
         }
 
-        suffix[n-1] = box_for_sphere(prims[prim_indices[start + n - 1]]);
+        suffix[n-1] = prim_boxes[prim_indices[start + n - 1]];
         for (int i = n - 2; i >= 0; i--) {
-            suffix[i] = surrounding_box(suffix[i+1], box_for_sphere(prims[prim_indices[start + i]]));
+            suffix[i] = surrounding_box(suffix[i+1], prim_boxes[prim_indices[start + i]]);
         }
 
         for (int i = 0; i < n - 1; i++) {
@@ -147,8 +145,8 @@ int build_sah_bvh(std::vector<int>& prim_indices,
 
     // Resort with chosen axis
     std::sort(prim_indices.begin() + start, prim_indices.begin() + end, [&](int a, int b){
-        vec3 ca = 0.5f * (box_for_sphere(prims[a]).min() + box_for_sphere(prims[a]).max());
-        vec3 cb = 0.5f * (box_for_sphere(prims[b]).min() + box_for_sphere(prims[b]).max());
+        vec3 ca = 0.5f * (prim_boxes[a].min() + prim_boxes[a].max());
+        vec3 cb = 0.5f * (prim_boxes[b].min() + prim_boxes[b].max());
         return ca[best_axis] < cb[best_axis];
     });
 
@@ -163,8 +161,8 @@ int build_sah_bvh(std::vector<int>& prim_indices,
     nodes.push_back(node);
 
     // Recursively build children
-    int left_index = build_sah_bvh(prim_indices, start, mid, prims, prim_boxes, nodes, leaf_size);
-    int right_index = build_sah_bvh(prim_indices, mid, end, prims, prim_boxes, nodes, leaf_size);
+    int left_index = build_sah_bvh(prim_indices, start, mid, prim_boxes, nodes, leaf_size);
+    int right_index = build_sah_bvh(prim_indices, mid, end, prim_boxes, nodes, leaf_size);
 
     nodes[node_index].left = left_index;
     nodes[node_index].right = right_index;

@@ -50,21 +50,4 @@ __device__ aabb sphere::bounding_box() const {
     return aabb(center - r, center + r);
 }
 
-// Host-side scene description used to build a BVH on CPU then transfer to GPU.
-struct SphereData {
-    vec3 center;
-    float radius;
-    int mat_type;   // 0 lambertian, 1 metal, 2 dielectric
-    vec3 albedo;
-    float fuzz;
-    float ref_idx;
-};
-
-// Host-side function to compute box for SphereData
-inline aabb box_for_sphere(const SphereData& s) {
-    vec3 r(s.radius, s.radius, s.radius);
-    return aabb(s.center - r, s.center + r);
-}
-
-
 #endif
