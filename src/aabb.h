@@ -24,7 +24,7 @@ public:
      */
     __host__ __device__ inline float surface_area() const {
         vec3 d = _max - _min;
-        return 2.0f * (d.x()*d.y() + d.y()*d.z() + d.z()*d.x());
+        return (d.x()*d.y() + d.y()*d.z() + d.z()*d.x()); //Removed factor of 2 for optimization
     }
 
     /**

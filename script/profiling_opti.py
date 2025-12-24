@@ -67,7 +67,7 @@ else:
 labels = [str(n) for n in n_obj_accurate]
 x = range(len(labels))
 plt.bar(x, fb_alloc, label='Framebuffer allocation')
-plt.bar(x, scene_gen, bottom=fb_alloc, label='Scene generation')
+plt.bar(x, scene_gen, bottom=fb_alloc, label='World creation')
 bottoms = [i+j for i,j in zip(fb_alloc, scene_gen)]
 plt.bar(x, bvh_build, bottom=bottoms, label='BVH building')
 bottoms = [i+j for i,j in zip(bottoms, bvh_build)]
@@ -81,8 +81,8 @@ plt.bar(x, cleanup, bottom=bottoms, label='Ressource freeing')
 plt.xticks(x, labels)
 plt.xlabel('Number of Objects')
 plt.ylabel('Time (s)')
-plt.title('Profiling of Optimized CUDA Ray Tracer')
+#plt.title('Profiling of Optimized CUDA Ray Tracer')
 plt.legend()
 plt.tight_layout()
-plt.savefig(f'{img_dir}profiling_opti.png')
+plt.savefig(f'{img_dir}profiling_opti.pdf')
 plt.clf()

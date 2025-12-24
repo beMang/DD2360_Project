@@ -2,15 +2,13 @@ CUDA_PATH     ?= /usr/local/cuda
 HOST_COMPILER  = g++
 NVCC           = nvcc -ccbin $(HOST_COMPILER)
 
-NVCC_DBG       =
-
 # GPU architecture for GTX 1080 (SM 61 for Adrien, might adapt for your GPU)
 ARCH_FLAGS = \
     -arch=sm_61 \
     -gencode arch=compute_61,code=sm_61 \
     -gencode arch=compute_61,code=compute_61
 
-NVCCFLAGS  = $(NVCC_DBG) -m64 $(ARCH_FLAGS) -O3 -use_fast_math
+NVCCFLAGS  = -m64 $(ARCH_FLAGS) -O3 -use_fast_math
 
 # --------------------------------------------------------------
 # Directories

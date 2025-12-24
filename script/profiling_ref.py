@@ -61,7 +61,7 @@ else:
 labels = [str(n) for n in n_obj_accurate]
 x = range(len(labels))
 plt.bar(x, rand_init_time, label='Memory allocation')
-plt.bar(x, create_world_time, bottom=rand_init_time, label='World allocation')
+plt.bar(x, create_world_time, bottom=rand_init_time, label='World creation')
 bottoms = [i+j for i,j in zip(rand_init_time, create_world_time)]
 plt.bar(x, render_time, bottom=bottoms, label='Rendering')
 bottoms = [i+j for i,j in zip(bottoms, render_time)]
@@ -71,8 +71,8 @@ plt.bar(x, free_cuda_time, bottom=bottoms, label='Ressource freeing')
 plt.xticks(x, labels)
 plt.xlabel('Number of Objects')
 plt.ylabel('Time (s)')
-plt.title('Profiling of Reference CUDA Ray Tracer')
+#plt.title('Profiling of Reference CUDA Ray Tracer')
 plt.legend()
 plt.tight_layout()
-plt.savefig(f'{img_dir}profiling_ref.png')
+plt.savefig(f'{img_dir}profiling_ref.pdf')
 plt.clf()
