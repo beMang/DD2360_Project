@@ -16,13 +16,18 @@ Image are exported in PPM format, `ref.ppm` contains the original image of propo
 * Implement SSIM and MSE metrics for comparison
 * BVH implementation : this drastically reduce the number of hit done. Works better for large amount of object.
 * Input argument : number of object (this is not precise due to the way it was done in reference implementation) and number of sample per pixel
-* Generate scene on GPU in parallel
+* Generate scene on GPU in parallel (and free in //)
 * Profiling done for each part of program (for reference and optimized implementation)
 
-## Idea
-* Make the creation of the world parallel : might worth it for large amount of object
-* Removal of virtual function
-* Impact of unified memory
+## Report TODO (Adrien)
+* Write how the BVH works
+   * Tree traversal
+   * Tree construction details
+   * How try to benefit from coalesced memory access
+* Results
+   * Validation with MSE and SSIM
+   * Comment on obtained results
+* Small conclusion
 
 ## Profiling results
 
@@ -74,7 +79,7 @@ Device "NVIDIA GeForce GTX 1080 Ti (0)"
 Total CPU Page faults: 35
 ```
 
-BHV implementation (but world creation is not parallel):
+BHV implementation (clean up is in parallel, but world creation is not parallel):
 ```
 Rendering a 1200x800 image with 10 samples per pixel
 in 8x8 blocks.

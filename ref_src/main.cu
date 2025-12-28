@@ -190,7 +190,7 @@ int main(int argc, char** argv) {
     rand_init<<<1,1>>>(d_rand_state2);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
-    measure_time(&p_start, &p_stop, "rand_init");
+    measure_time(&p_start, &p_stop, "mem_alloc");
 
     // make our world of hitables & the camera
     int* d_n_obj;
