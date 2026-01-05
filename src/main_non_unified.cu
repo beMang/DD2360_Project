@@ -152,6 +152,9 @@ __global__ void free_world(hitable **d_list, hitable **d_world, camera **d_camer
 }
 
 int main(int argc, char* argv[]) {
+    float *dummyptr;
+    cudaMalloc(&dummyptr, sizeof(float)); //initialize and free a dummy to get rid of initialization times
+    cudaFree(dummyptr);
     if (argc != 4) {
         std::cerr << "Usage: " << argv[0] << " <nx> <ny> <ns>\n";
         return 1;
@@ -172,23 +175,34 @@ int main(int argc, char* argv[]) {
 
     // allocate FB 
     //K: Lets try this with standard memory allocation procedures
+    clock_t fballocstart, fballocstop;
+    fballocstart = clock();
     vec3 *fb;
     vec3 *frameBuffer;
     frameBuffer = (vec3*)malloc(fb_size);
     checkCudaErrors(cudaMalloc((void **)&fb, fb_size));
+    fballocstop = clock();
 
     // allocate random state
+    clock_t randstateallocstart, randstateallocstop;
+    randstateallocstart = clock();
     curandState *d_rand_state;
     checkCudaErrors(cudaMalloc((void **)&d_rand_state, num_pixels*sizeof(curandState)));
     curandState *d_rand_state2;
     checkCudaErrors(cudaMalloc((void **)&d_rand_state2, 1*sizeof(curandState)));
+    randstateallocstop = clock();
 
     // we need that 2nd random state to be initialized for the world creation
+    clock_t randstateinitstart, randstateinitstop;
+    randstateinitstart = clock();
     rand_init<<<1,1>>>(d_rand_state2);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
+    randstateinitstop = clock();
 
     // make our world of hitables & the camera
+    clock_t worldinitstart, worldinitstop;
+    worldinitstart = clock();
     hitable **d_list;
     int num_hitables = 22*22+1+3;
     checkCudaErrors(cudaMalloc((void **)&d_list, num_hitables*sizeof(hitable *)));
@@ -199,9 +213,10 @@ int main(int argc, char* argv[]) {
     create_world<<<1,1>>>(d_list, d_world, d_camera, nx, ny, d_rand_state2);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
+    worldinitstop = clock();
 
-    clock_t start, stop;
-    start = clock();
+    clock_t kernelstart, kernelstop;
+    kernelstart = clock();
     // Render our buffer
     dim3 blocks(nx/tx+1,ny/ty+1);
     dim3 threads(tx,ty);
@@ -211,10 +226,28 @@ int main(int argc, char* argv[]) {
     render<<<blocks, threads>>>(fb, nx, ny,  ns, d_camera, d_world, d_rand_state);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
-    stop = clock();
-    double timer_seconds = ((double)(stop - start)) / CLOCKS_PER_SEC;
+    kernelstop = clock();
+
+    double fballoctimer_seconds = ((double)(fballocstop - fballocstart)) / CLOCKS_PER_SEC;
+    double randomalloctimer_seconds = ((double)(randstateallocstop - randstateallocstart)) / CLOCKS_PER_SEC;
+    double randominittimer_seconds = ((double)randstateinitstop - randstateinitstart) / CLOCKS_PER_SEC;
+    double worldinittimer_seconds = ((double) worldinitstop - worldinitstart) / CLOCKS_PER_SEC;
+    double kerneltimer_seconds = ((double)(kernelstop - kernelstart)) / CLOCKS_PER_SEC;
+
+    clock_t memcpystart, memcpystop;
+    memcpystart = clock();
     cudaMemcpy(frameBuffer, fb, fb_size, cudaMemcpyDeviceToHost);
-    std::cerr << "took " << timer_seconds << " seconds.\n";
+    memcpystop = clock();
+    double memcpytimer_seconds = ((double)(memcpystop-memcpystart)/CLOCKS_PER_SEC);
+
+    std::cerr << "Timers: \n";
+    std::cerr << "Buffer allocation: " << fballoctimer_seconds << " seconds.\n";
+    std::cerr << "Random state allocation: " << randomalloctimer_seconds << " seconds. \n";
+    std::cerr << "Random state initialization: " << randominittimer_seconds << " seconds.\n";
+    std::cerr << "World initialization: " << worldinittimer_seconds << " seconds.\n";
+    std::cerr << "Image creation: " << kerneltimer_seconds << " seconds.\n";
+    std::cerr << "Memcpy: " << memcpytimer_seconds << "\n";
+
     // Output FB as Image
     std::cout << "P3\n" << nx << " " << ny << "\n255\n";
     for (int j = ny-1; j >= 0; j--) {
@@ -237,6 +270,7 @@ int main(int argc, char* argv[]) {
     checkCudaErrors(cudaFree(d_rand_state));
     checkCudaErrors(cudaFree(d_rand_state2));
     checkCudaErrors(cudaFree(fb));
+    free(frameBuffer);
 
     cudaDeviceReset();
 }

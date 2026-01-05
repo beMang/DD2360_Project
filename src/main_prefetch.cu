@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-#include <sys/time.h>
 #include <float.h>
 #include <curand_kernel.h>
 #include "vec3.h"
@@ -11,14 +10,7 @@
 #include "hitable_list.h"
 #include "camera.h"
 #include "material.h"
-
-double cpuSecond()
-{
-    struct timeval tp;
-    gettimeofday(&tp, NULL);
-    return ((double)tp.tv_sec + (double)tp.tv_usec * 1.e-6);
-}
-
+#include <cuda_runtime_api.h>
 
 // limited version of checkCudaErrors from helper_cuda.h in CUDA examples
 #define checkCudaErrors(val) check_cuda( (val), #val, __FILE__, __LINE__ )
@@ -152,15 +144,28 @@ __global__ void free_world(hitable **d_list, hitable **d_world, camera **d_camer
     delete *d_camera;
 }
 
+#define gpuCheck(stmt)                                               \
+  do {                                                               \
+      cudaError_t err = stmt;                                        \
+      if (err != cudaSuccess) {                                      \
+          printf("ERROR. Failed to run stmt %s\n", #stmt);           \
+          break;                                                     \
+      }                                                              \
+  } while (0)
+
 int main(int argc, char* argv[]) {
     float *dummyptr;
     cudaMalloc(&dummyptr, sizeof(float)); //initialize and free a dummy to get rid of initialization times
     cudaFree(dummyptr);
+
+    // Ensure CUDA runtime is fully initialized
+    cudaFree(0);
+    cudaDeviceSynchronize();
+
     if (argc != 4) {
         std::cerr << "Usage: " << argv[0] << " <nx> <ny> <ns>\n";
         return 1;
     }
-
     int nx = std::atoi(argv[1]);
     int ny = std::atoi(argv[2]);
     int ns = std::atoi(argv[3]);
@@ -174,20 +179,32 @@ int main(int argc, char* argv[]) {
     int num_pixels = nx*ny;
     size_t fb_size = num_pixels*sizeof(vec3);
 
+
     // allocate FB 
+    //K: Lets try this with standard memory allocation procedures
     clock_t fballocstart, fballocstop;
     fballocstart = clock();
     vec3 *fb;
     checkCudaErrors(cudaMallocManaged((void **)&fb, fb_size));
     fballocstop = clock();
 
+
+
+    int device = 0; // Device to be used
+    gpuCheck(cudaSetDevice(device));  // We got here some errors previously, so set device!
+    cudaMemLocation hostLoc = {cudaMemLocationTypeHost, 0};
+    cudaMemLocation deviceLoc = {cudaMemLocationTypeDevice, device};
+
+    cudaMemAdvise(fb, fb_size, cudaMemAdviseSetAccessedBy, hostLoc);
+    cudaMemAdvise(fb, fb_size, cudaMemAdviseSetPreferredLocation, deviceLoc);
+
     // allocate random state
     clock_t randstateallocstart, randstateallocstop;
     randstateallocstart = clock();
     curandState *d_rand_state;
-    checkCudaErrors(cudaMallocManaged((void **)&d_rand_state, num_pixels*sizeof(curandState)));
+    checkCudaErrors(cudaMalloc((void **)&d_rand_state, num_pixels*sizeof(curandState)));
     curandState *d_rand_state2;
-    checkCudaErrors(cudaMallocManaged((void **)&d_rand_state2, 1*sizeof(curandState)));
+    checkCudaErrors(cudaMalloc((void **)&d_rand_state2, 1*sizeof(curandState)));
     randstateallocstop = clock();
 
     // we need that 2nd random state to be initialized for the world creation
@@ -203,11 +220,11 @@ int main(int argc, char* argv[]) {
     worldinitstart = clock();
     hitable **d_list;
     int num_hitables = 22*22+1+3;
-    checkCudaErrors(cudaMallocManaged((void **)&d_list, num_hitables*sizeof(hitable *)));
+    checkCudaErrors(cudaMalloc((void **)&d_list, num_hitables*sizeof(hitable *)));
     hitable **d_world;
-    checkCudaErrors(cudaMallocManaged((void **)&d_world, sizeof(hitable *)));
+    checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hitable *)));
     camera **d_camera;
-    checkCudaErrors(cudaMallocManaged((void **)&d_camera, sizeof(camera *)));
+    checkCudaErrors(cudaMalloc((void **)&d_camera, sizeof(camera *)));
     create_world<<<1,1>>>(d_list, d_world, d_camera, nx, ny, d_rand_state2);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
@@ -215,6 +232,7 @@ int main(int argc, char* argv[]) {
 
     clock_t kernelstart, kernelstop;
     kernelstart = clock();
+    //cudaMemPrefetchAsync(fb, fb_size, 0, 0);
     // Render our buffer
     dim3 blocks(nx/tx+1,ny/ty+1);
     dim3 threads(tx,ty);
@@ -233,11 +251,12 @@ int main(int argc, char* argv[]) {
     double kerneltimer_seconds = ((double)(kernelstop - kernelstart)) / CLOCKS_PER_SEC;
     
     std::cerr << "Timers: \n";
-    std::cerr << "Buffer allocation: " << fballoctimer_seconds << " seconds.\n";
-    std::cerr << "Random state allocation: " << randomalloctimer_seconds << " seconds. \n";
-    std::cerr << "Random state initialization: " << randominittimer_seconds << " seconds.\n";
-    std::cerr << "World initialization: " << worldinittimer_seconds << " seconds.\n";
-    std::cerr << "Image creation: " << kerneltimer_seconds << " seconds.\n";
+    std::cerr << "Buffer allocation: " << fballoctimer_seconds << "\n";
+    std::cerr << "Random state allocation: " << randomalloctimer_seconds << "\n";
+    std::cerr << "Random state initialization: " << randominittimer_seconds << "\n";
+    std::cerr << "World initialization: " << worldinittimer_seconds << "\n";
+    std::cerr << "Image creation: " << kerneltimer_seconds << "\n";
+    //std::cerr << "Prefetch: " << prefetchtimer_seconds << "\n";
     
     // Output FB as Image
     std::cout << "P3\n" << nx << " " << ny << "\n255\n";
@@ -264,3 +283,4 @@ int main(int argc, char* argv[]) {
 
     cudaDeviceReset();
 }
+
