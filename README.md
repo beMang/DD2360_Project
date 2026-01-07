@@ -199,6 +199,7 @@ Total CPU Page faults: 12
 
 ### Profiling BVH + parallel generation and clean-up + removal of virtual function
 
+```
 Rendering a 1200x800 image with 10 samples per pixel in 8x8 blocks.
 ==46379== NVPROF is profiling process 46379, command: ./bin/cudart_sd 8000
          0.198627 sec for fb_alloc
@@ -243,3 +244,4 @@ Device "NVIDIA GeForce GTX 1080 Ti (0)"
       25  112.64KB  4.0000KB  0.9961MB  2.750000MB  258.0310us  Device To Host
       12         -         -         -           -  1.561779ms  Gpu page fault groups
 Total CPU Page faults: 12
+```
