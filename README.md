@@ -26,14 +26,13 @@ This repo contains the project for DD2360 applied GPU programming course at KTH.
 
 ## Compilation
 
-To compile the project and obtained the binary use the command `make all`.
-It will generate multiple binary :
+To compile the project and obtained the binary use the command `make all`. Note that it might be needed to change `ARCH_FLAGS` depending on the GPU architecture on which program is ran. It will generate multiple binary :
 1. `cudart` : all optimisation except removal of virtual function
 2. `cudart_sd` : all optimisation including static dispatching
 3. `cudart_ref` : reference implementation (the one from Nvidia blog)
 4. `cudart_ref_parallel` : the reference implementation, but only modification is the parallelisation of world creation. This is used for the validation of our version.
 
-Note that it might be needed to change `ARCH_FLAGS` depending on the GPU architecture on which program is ran.
+Each binary has two arguments : the first is the number of objects and the second one is the number of sample done by the ray tracer. For example `bin/cudart 500 20` to generate an image with roughly 500 objects and 20 samples done.
 
 ## Checking output
 
