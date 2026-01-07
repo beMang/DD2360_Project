@@ -2,36 +2,56 @@
 
 This repo contains the project for DD2360 applied GPU programming course at KTH. It implements a simple ray tracer, with the [proposed implementation](https://developer.nvidia.com/blog/accelerated-ray-tracing-cuda/). Our goal is to optimise the project to render an image faster.
 
-## Contributors
+## Modifications done
+
 * Adrien Antonutti
+   * 8 bits conversion for frame buffer
+   * BVH implementation
+   * Parallel scene generation and clean up
+   * MSE and SSIM metrics for validation
 * Kei Duke-Bergman
+   * Impact of unified memory
+   * Attempt memadvise and prefetch in Windows
 * Giovanni Prete
+   * Impact of removal of polymorphic class and function
 
-## Image file
-Image are exported in PPM format, `ref.ppm` contains the original image of proposed implementation. It is kept for comparison purpose. `image.ppm` is obtained with our implementation.
+## Project structure
 
-## Adrien's modification done :
-* Export PPM file directly instead of redirecting stdout
-* Round to 8 bits before copy back to CPU (image is little different, but 8bits vary only form 1 so negligible (can by exactly the same if 25.99 is a double))
-* Implement SSIM and MSE metrics for comparison
-* BVH implementation : this drastically reduce the number of hit done. Works better for large amount of object.
-* Input argument : number of object (this is not precise due to the way it was done in reference implementation) and number of sample per pixel
-* Generate scene on GPU in parallel (and free in //)
-* Profiling done for each part of program (for reference and optimized implementation)
+* `bin` contains the binary of the project.
+* `ref_src` contains the reference implementation : both the "real" reference and "parallelize scene creation" version that was used for validation of our optimised implementation. This has to be done because the random behavior of serial and parallel scene creation couldn't be exactly the same.
+* `script` contains some python script to generate the graphs (those might be outdated)
+* `src` contains our optimised implementation : both with and without virtual function (without being the most performant).
+* `src_unified` contains the code related to unified memory experience (This is not compiled in the makefile but still provided if needed)
+* `tmp` will contain the output images.
 
-## Report TODO (Adrien)
-* Write how the BVH works
-   * Tree traversal
-   * Tree construction details
-   * How try to benefit from coalesced memory access
-* Results
-   * Validation with MSE and SSIM
-   * Comment on obtained results
-* Small conclusion
+## Compilation
 
-## Profiling results
+To compile the project and obtained the binary use the command `make all`.
+It will generate multiple binary :
+1. `cudart` : all optimisation except removal of virtual function
+2. `cudart_sd` : all optimisation including static dispatching
+3. `cudart_ref` : reference implementation (the one from Nvidia blog)
+4. `cudart_ref_parallel` : the reference implementation, but only modification is the parallelisation of world creation. This is used for the validation of our version.
+
+Note that it might be needed to change `ARCH_FLAGS` depending on the GPU architecture on which program is ran.
+
+## Checking output
+
+To check the output of the program, look at the produced image in the tmp file. `cudart` and `cudart_ref` will produce `tmp/image.ppm`. And `cudart_ref_parallel` and `cudart_ref` will respectively generate `tmp/ref_image_parallel.ppm` and `tmp/ref_image.ppm`.
+
+For a simple test, `make test` can be used. It will compile everything needed and then launch the parallel reference, then the 2 different optimised version. MSE and SSIM metrics for image comparison are assessed, as well as timing of the different part of the program.
+
+## Other makefile command
+
+* `make profile_basic` and `make profile_metrics` can be used to perform basic `nvprof` profiling for the implementation containing all optimisations.
+* `make clean` can be used to clean the project directory.
+
+## Basic profiling results
+
+This section contains basic profiling results obtained with `nvprof`.
 
 ### Profiling reference implementation
+
 Profiling with 7748 objects :
 
 Reference implementation :
@@ -78,6 +98,8 @@ Device "NVIDIA GeForce GTX 1080 Ti (0)"
       33         -         -         -           -  5.294023ms  Gpu page fault groups
 Total CPU Page faults: 35
 ```
+
+### Profiling BVH implementation without world creation
 
 BHV implementation (clean up is in parallel, but world creation is not parallel):
 ```
@@ -127,7 +149,8 @@ Device "NVIDIA GeForce GTX 1080 Ti (0)"
 Total CPU Page faults: 12
 ```
 
-BHV implentation + parallel world creation :
+### Profiling BVH + parallel generation and clean-up
+
 ```
 Rendering a 1200x800 image with 10 samples per pixel
 in 8x8 blocks.
@@ -173,3 +196,50 @@ Device "NVIDIA GeForce GTX 1080 Ti (0)"
       12         -         -         -           -  2.006379ms  Gpu page fault groups
 Total CPU Page faults: 12
 ```
+
+### Profiling BVH + parallel generation and clean-up + removal of virtual function
+
+Rendering a 1200x800 image with 10 samples per pixel in 8x8 blocks.
+==46379== NVPROF is profiling process 46379, command: ./bin/cudart_sd 8000
+         0.198627 sec for fb_alloc
+         0.008718 sec for scene_gen
+         0.038886 sec for bvh_build
+         0.001624 sec for render_init
+         0.209414 sec for render
+took 0.457372 seconds with 7925 objects.
+         0.169904 sec for image_save
+         0.037815 sec for cleanup
+==46379== Profiling application: ./bin/cudart_sd 8000
+==46379== Profiling result:
+            Type  Time(%)      Time     Calls       Avg       Min       Max  Name
+ GPU activities:   96.95%  208.23ms         1  208.23ms  208.23ms  208.23ms  render(vec3_8bit*, int, int, int, camera**, bvh_flat_world**, curandStateXORWOW*)
+                    1.44%  3.0940ms         1  3.0940ms  3.0940ms  3.0940ms  generate_scene_data(sphere_opt**, int)
+                    0.86%  1.8438ms         1  1.8438ms  1.8438ms  1.8438ms  free_world(sphere_opt**, int, bvh_flat_world**, camera**)
+                    0.72%  1.5449ms         1  1.5449ms  1.5449ms  1.5449ms  render_init(BVHNodeData const *, int, sphere_opt**, bvh_flat_world**, camera**, int, int, curandStateXORWOW*)
+                    0.02%  34.369us         2  17.184us  3.8400us  30.529us  [CUDA memcpy HtoD]
+                    0.01%  24.609us         1  24.609us  24.609us  24.609us  [CUDA memcpy DtoH]
+                    0.00%  7.6480us         1  7.6480us  7.6480us  7.6480us  compute_bounding_boxes(sphere_opt**, int, aabb*)
+                    0.00%  3.4880us         1  3.4880us  3.4880us  3.4880us  reorder_hitables(sphere_opt**, sphere_opt**, int*, int)
+      API calls:   47.27%  240.60ms         1  240.60ms  240.60ms  240.60ms  cudaMallocManaged
+                   42.19%  214.79ms         6  35.798ms  10.768us  208.25ms  cudaDeviceSynchronize
+                    8.78%  44.706ms         1  44.706ms  44.706ms  44.706ms  cudaDeviceReset
+                    1.21%  6.1507ms         6  1.0251ms  7.0820us  5.9898ms  cudaLaunchKernel
+                    0.31%  1.5981ms         9  177.57us  2.8800us  1.3130ms  cudaFree
+                    0.11%  574.65us         8  71.830us  3.7510us  300.70us  cudaMalloc
+                    0.06%  321.50us       114  2.8200us     343ns  118.50us  cuDeviceGetAttribute
+                    0.04%  226.91us         3  75.636us  42.649us  137.65us  cudaMemcpy
+                    0.01%  28.675us         1  28.675us  28.675us  28.675us  cuDeviceGetName
+                    0.00%  20.424us         1  20.424us  20.424us  20.424us  cuDeviceGetPCIBusId
+                    0.00%  7.2980us         1  7.2980us  7.2980us  7.2980us  cuDeviceTotalMem
+                    0.00%  4.9270us         3  1.6420us     502ns  3.6470us  cuDeviceGetCount
+                    0.00%  3.9700us         6     661ns     152ns  1.8140us  cudaGetLastError
+                    0.00%  2.2820us         2  1.1410us     425ns  1.8570us  cuDeviceGet
+                    0.00%     926ns         1     926ns     926ns     926ns  cuModuleGetLoadingMode
+                    0.00%     638ns         1     638ns     638ns     638ns  cuDeviceGetUuid
+
+==46379== Unified Memory profiling result:
+Device "NVIDIA GeForce GTX 1080 Ti (0)"
+   Count  Avg Size  Min Size  Max Size  Total Size  Total Time  Name
+      25  112.64KB  4.0000KB  0.9961MB  2.750000MB  258.0310us  Device To Host
+      12         -         -         -           -  1.561779ms  Gpu page fault groups
+Total CPU Page faults: 12

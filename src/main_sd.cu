@@ -11,6 +11,8 @@
 #include "util.h"
 #include "kernel_sd.h"
 
+// files with _sd prefix correspond to the implementation with removal of virtual functions.
+
 #define checkCudaErrors(val) check_cuda((val), #val, __FILE__, __LINE__)
 void check_cuda(cudaError_t result, char const *const func, const char *const file, int const line) {
     if (result) {
@@ -121,8 +123,19 @@ int main(int argc, char** argv) {
     
     std::cout << "took " << ((double)(stop - start)) / CLOCKS_PER_SEC << " seconds with " << n_obj << " objects.\n";
 
-    saveFramebufferAsPPM("image.ppm", fb, nx, ny);
+    saveFramebufferAsPPM("tmp/image.ppm", fb, nx, ny);
     measure_time(&p_start, &p_stop, "image_save");
+
+    // Compute and prints metrics
+    std::string ref_image_filename = "tmp/ref_image_parallel.ppm";
+    float mse = MSE_error("tmp/image.ppm", ref_image_filename.c_str());
+    printf("Comparison metrics : %s vs %s\n", "tmp/image.ppm", ref_image_filename.c_str());
+    printf("\tMSE : %f %%\n", 100*mse);
+    double psnr = 10.0 * log10(1.0 / mse);
+    printf("\tPSNR : %f dB\n", psnr);
+
+    float ssim = SSIM_error("tmp/image.ppm", ref_image_filename.c_str(), nx, ny);
+    printf("\tSSIM : %f %%\n", 100*ssim);
 
     // Resource cleanup
     p_start = clock();

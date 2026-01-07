@@ -1,5 +1,8 @@
 #include <iostream>
+#include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
+#include <sys/time.h>
 #include <float.h>
 #include <curand_kernel.h>
 #include "vec3.h"
@@ -8,14 +11,21 @@
 #include "hitable_list.h"
 #include "camera.h"
 #include "material.h"
-#include "util.h"
+
+double cpuSecond()
+{
+    struct timeval tp;
+    gettimeofday(&tp, NULL);
+    return ((double)tp.tv_sec + (double)tp.tv_usec * 1.e-6);
+}
+
 
 // limited version of checkCudaErrors from helper_cuda.h in CUDA examples
 #define checkCudaErrors(val) check_cuda( (val), #val, __FILE__, __LINE__ )
 
 void check_cuda(cudaError_t result, char const *const func, const char *const file, int const line) {
     if (result) {
-        std::cout << "CUDA error = " << static_cast<unsigned int>(result) << " at " <<
+        std::cerr << "CUDA error = " << static_cast<unsigned int>(result) << " at " <<
             file << ":" << line << " '" << func << "' \n";
         // Make sure we call CUDA Device Reset before exiting
         cudaDeviceReset();
@@ -88,18 +98,36 @@ __global__ void render(vec3 *fb, int max_x, int max_y, int ns, camera **cam, hit
     fb[pixel_index] = col;
 }
 
-__global__ void create_world(hitable **d_list, hitable **d_world, camera **d_camera, int nx, int ny, curandState *rand_state, int grid_size, int* n_obj) {
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    int idy = threadIdx.y + blockIdx.y * blockDim.y;
-    if (idx == 0 && idy == 0) {
+#define RND (curand_uniform(&local_rand_state))
+
+__global__ void create_world(hitable **d_list, hitable **d_world, camera **d_camera, int nx, int ny, curandState *rand_state) {
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
         curandState local_rand_state = *rand_state;
-        d_list[0] = new sphere(vec3(0,-1000.0,-1), 1000,new lambertian(vec3(0.5, 0.5, 0.5)));
-        d_list[1] = new sphere(vec3(0, 1,0),  1.0, new dielectric(1.5));
-        d_list[2] = new sphere(vec3(-4, 1, 0), 1.0, new lambertian(vec3(0.4, 0.2, 0.1)));
-        d_list[3] = new sphere(vec3(4, 1, 0),  1.0, new metal(vec3(0.7, 0.6, 0.5), 0.0));
-        
-        *n_obj = grid_size * grid_size + 4;
-        *d_world  = new hitable_list(d_list, *n_obj);
+        d_list[0] = new sphere(vec3(0,-1000.0,-1), 1000,
+                               new lambertian(vec3(0.5, 0.5, 0.5)));
+        int i = 1;
+        for(int a = -11; a < 11; a++) {
+            for(int b = -11; b < 11; b++) {
+                float choose_mat = RND;
+                vec3 center(a+RND,0.2,b+RND);
+                if(choose_mat < 0.8f) {
+                    d_list[i++] = new sphere(center, 0.2,
+                                             new lambertian(vec3(RND*RND, RND*RND, RND*RND)));
+                }
+                else if(choose_mat < 0.95f) {
+                    d_list[i++] = new sphere(center, 0.2,
+                                             new metal(vec3(0.5f*(1.0f+RND), 0.5f*(1.0f+RND), 0.5f*(1.0f+RND)), 0.5f*RND));
+                }
+                else {
+                    d_list[i++] = new sphere(center, 0.2, new dielectric(1.5));
+                }
+            }
+        }
+        d_list[i++] = new sphere(vec3(0, 1,0),  1.0, new dielectric(1.5));
+        d_list[i++] = new sphere(vec3(-4, 1, 0), 1.0, new lambertian(vec3(0.4, 0.2, 0.1)));
+        d_list[i++] = new sphere(vec3(4, 1, 0),  1.0, new metal(vec3(0.7, 0.6, 0.5), 0.0));
+        *rand_state = local_rand_state;
+        *d_world  = new hitable_list(d_list, 22*22+1+3);
 
         vec3 lookfrom(13,2,3);
         vec3 lookat(0,0,0);
@@ -113,33 +141,6 @@ __global__ void create_world(hitable **d_list, hitable **d_world, camera **d_cam
                                  aperture,
                                  dist_to_focus);
     }
-
-    if(idx < grid_size && idy < grid_size) {
-        int half_grid = grid_size/2;
-        int id = idx + idy*grid_size +4;
-
-        curandState rand_state;
-        curand_init(1984 + id, 0, 0, &rand_state);
-        
-        float choose_mat = curand_uniform(&rand_state);
-        vec3 center(idx - half_grid + curand_uniform(&rand_state), 0.2f, idy - half_grid + curand_uniform(&rand_state));
-        if(choose_mat < 0.8f) {
-            vec3 albedo(curand_uniform(&rand_state)*curand_uniform(&rand_state),
-                        curand_uniform(&rand_state)*curand_uniform(&rand_state),
-                        curand_uniform(&rand_state)*curand_uniform(&rand_state));
-            d_list[id] = new sphere(center, 0.2f, new lambertian(albedo));
-        }
-        else if(choose_mat < 0.95f) {
-            vec3 albedo(0.5f*(1.0f+curand_uniform(&rand_state)),
-                        0.5f*(1.0f+curand_uniform(&rand_state)),
-                        0.5f*(1.0f+curand_uniform(&rand_state)));
-            float fuzz = 0.5f * curand_uniform(&rand_state);
-            d_list[id] = new sphere(center, 0.2f, new metal(albedo, fuzz));
-        }
-        else {
-            d_list[id] = new sphere(center, 0.2f, new dielectric(1.5f));
-        }
-    }
 }
 
 __global__ void free_world(hitable **d_list, hitable **d_world, camera **d_camera) {
@@ -151,60 +152,69 @@ __global__ void free_world(hitable **d_list, hitable **d_world, camera **d_camer
     delete *d_camera;
 }
 
-int main(int argc, char** argv) {
-    int nx = 1200;
-    int ny = 800;
-    int ns = 10;
+int main(int argc, char* argv[]) {
+    float *dummyptr;
+    cudaMalloc(&dummyptr, sizeof(float)); //initialize and free a dummy to get rid of initialization times
+    cudaFree(dummyptr);
+    if (argc != 4) {
+        std::cerr << "Usage: " << argv[0] << " <nx> <ny> <ns>\n";
+        return 1;
+    }
+
+    int nx = std::atoi(argv[1]);
+    int ny = std::atoi(argv[2]);
+    int ns = std::atoi(argv[3]);
+
     int tx = 8;
     int ty = 8;
-    int n_obj  = 22*22+1+3;
 
-    if (argc > 1) n_obj = atoi(argv[1]);
-    if (argc > 2) ns = atoi(argv[2]);
-
-    std::cout << "Rendering a " << nx << "x" << ny << " image with " << ns << " samples per pixel ";
-    std::cout << "in " << tx << "x" << ty << " blocks.\n";
-
-    clock_t start, stop;
-    start = clock();
+    std::cerr << "Rendering a " << nx << "x" << ny << " image with " << ns << " samples per pixel ";
+    std::cerr << "in " << tx << "x" << ty << " blocks.\n";
 
     int num_pixels = nx*ny;
     size_t fb_size = num_pixels*sizeof(vec3);
 
-    // allocate FB
+    // allocate FB 
+    clock_t fballocstart, fballocstop;
+    fballocstart = clock();
     vec3 *fb;
     checkCudaErrors(cudaMallocManaged((void **)&fb, fb_size));
+    fballocstop = clock();
 
     // allocate random state
+    clock_t randstateallocstart, randstateallocstop;
+    randstateallocstart = clock();
     curandState *d_rand_state;
-    checkCudaErrors(cudaMalloc((void **)&d_rand_state, num_pixels*sizeof(curandState)));
+    checkCudaErrors(cudaMallocManaged((void **)&d_rand_state, num_pixels*sizeof(curandState)));
     curandState *d_rand_state2;
-    checkCudaErrors(cudaMalloc((void **)&d_rand_state2, 1*sizeof(curandState)));
+    checkCudaErrors(cudaMallocManaged((void **)&d_rand_state2, 1*sizeof(curandState)));
+    randstateallocstop = clock();
 
     // we need that 2nd random state to be initialized for the world creation
+    clock_t randstateinitstart, randstateinitstop;
+    randstateinitstart = clock();
     rand_init<<<1,1>>>(d_rand_state2);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
+    randstateinitstop = clock();
 
     // make our world of hitables & the camera
-    int* d_n_obj;
-    int grid_size = static_cast<int>(sqrtf(static_cast<float>(n_obj - 4)));
-    int gen_block_size = 32;
-
-    checkCudaErrors(cudaMalloc((void **)&d_n_obj, sizeof(int)));
-    checkCudaErrors(cudaMemcpy(d_n_obj, &n_obj, sizeof(int), cudaMemcpyHostToDevice));
+    clock_t worldinitstart, worldinitstop;
+    worldinitstart = clock();
     hitable **d_list;
-    checkCudaErrors(cudaMalloc((void **)&d_list, n_obj*sizeof(hitable *)));
+    int num_hitables = 22*22+1+3;
+    checkCudaErrors(cudaMallocManaged((void **)&d_list, num_hitables*sizeof(hitable *)));
     hitable **d_world;
-    checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hitable *)));
+    checkCudaErrors(cudaMallocManaged((void **)&d_world, sizeof(hitable *)));
     camera **d_camera;
-    checkCudaErrors(cudaMalloc((void **)&d_camera, sizeof(camera *)));
-    create_world<<<dim3(grid_size/gen_block_size+1, grid_size/gen_block_size+1),dim3(gen_block_size,gen_block_size)>>>
-        (d_list, d_world, d_camera, nx, ny, d_rand_state2, grid_size, d_n_obj);
+    checkCudaErrors(cudaMallocManaged((void **)&d_camera, sizeof(camera *)));
+    create_world<<<1,1>>>(d_list, d_world, d_camera, nx, ny, d_rand_state2);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
-    checkCudaErrors(cudaMemcpy(&n_obj, d_n_obj, sizeof(int), cudaMemcpyDeviceToHost));
+    worldinitstop = clock();
 
+    clock_t kernelstart, kernelstop;
+    kernelstart = clock();
     // Render our buffer
     dim3 blocks(nx/tx+1,ny/ty+1);
     dim3 threads(tx,ty);
@@ -214,12 +224,32 @@ int main(int argc, char** argv) {
     render<<<blocks, threads>>>(fb, nx, ny,  ns, d_camera, d_world, d_rand_state);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
-    stop = clock();
-    double timer_seconds = ((double)(stop - start)) / CLOCKS_PER_SEC;
-    std::cout << "took " << timer_seconds << " seconds with " << n_obj << " objects.\n";
+    kernelstop = clock();
 
-    // output FB as ppm image in file
-    saveFramebufferAsPPM("tmp/ref_image_parallel.ppm", fb, nx, ny);
+    double fballoctimer_seconds = ((double)(fballocstop - fballocstart)) / CLOCKS_PER_SEC;
+    double randomalloctimer_seconds = ((double)(randstateallocstop - randstateallocstart)) / CLOCKS_PER_SEC;
+    double randominittimer_seconds = ((double)randstateinitstop - randstateinitstart) / CLOCKS_PER_SEC;
+    double worldinittimer_seconds = ((double) worldinitstop - worldinitstart) / CLOCKS_PER_SEC;
+    double kerneltimer_seconds = ((double)(kernelstop - kernelstart)) / CLOCKS_PER_SEC;
+    
+    std::cerr << "Timers: \n";
+    std::cerr << "Buffer allocation: " << fballoctimer_seconds << " seconds.\n";
+    std::cerr << "Random state allocation: " << randomalloctimer_seconds << " seconds. \n";
+    std::cerr << "Random state initialization: " << randominittimer_seconds << " seconds.\n";
+    std::cerr << "World initialization: " << worldinittimer_seconds << " seconds.\n";
+    std::cerr << "Image creation: " << kerneltimer_seconds << " seconds.\n";
+    
+    // Output FB as Image
+    std::cout << "P3\n" << nx << " " << ny << "\n255\n";
+    for (int j = ny-1; j >= 0; j--) {
+        for (int i = 0; i < nx; i++) {
+            size_t pixel_index = j*nx + i;
+            int ir = int(255.99*fb[pixel_index].r());
+            int ig = int(255.99*fb[pixel_index].g());
+            int ib = int(255.99*fb[pixel_index].b());
+            std::cout << ir << " " << ig << " " << ib << "\n";
+        }
+    }
 
     // clean up
     checkCudaErrors(cudaDeviceSynchronize());
@@ -231,7 +261,6 @@ int main(int argc, char** argv) {
     checkCudaErrors(cudaFree(d_rand_state));
     checkCudaErrors(cudaFree(d_rand_state2));
     checkCudaErrors(cudaFree(fb));
-    checkCudaErrors(cudaFree(d_n_obj));
 
     cudaDeviceReset();
 }

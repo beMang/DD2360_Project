@@ -133,7 +133,7 @@ int main(int argc, char** argv) {
     measure_time(&p_start, &p_stop, "image_save");
 
     // Compute and prints metrics
-    std::string ref_image_filename = "tmp/ref.ppm";
+    std::string ref_image_filename = "tmp/ref_image_parallel.ppm";
     float mse = MSE_error(output_image_filename.c_str(), ref_image_filename.c_str());
     printf("Comparison metrics : %s vs %s\n", output_image_filename.c_str(), ref_image_filename.c_str());
     printf("\tMSE : %f %%\n", 100*mse);
