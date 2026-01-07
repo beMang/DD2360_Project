@@ -1,0 +1,142 @@
+#include <iostream>
+#include <time.h>
+#include <vector>
+#include <curand_kernel.h>
+#include "vec3.h"
+#include "ray.h"
+#include "sphere_sd.h"
+#include "bvh_sd.h"
+#include "camera.h"
+#include "material_sd.h"
+#include "util.h"
+#include "kernel_sd.h"
+
+#define checkCudaErrors(val) check_cuda((val), #val, __FILE__, __LINE__)
+void check_cuda(cudaError_t result, char const *const func, const char *const file, int const line) {
+    if (result) {
+        std::cerr << "CUDA error = " << static_cast<unsigned int>(result) << " at " << file << ":" << line << " '" << func << "' \n";
+        cudaDeviceReset();
+        exit(99);
+    }
+}
+
+int main(int argc, char** argv) {
+    int nx = 1200;
+    int ny = 800;
+    int ns = 10;
+    int tx = 8;
+    int ty = 8;
+    int n_obj = 22*22 + 4;
+
+    if (argc > 1) n_obj = atoi(argv[1]);
+    if (argc > 2) ns = atoi(argv[2]);
+
+    std::cout << "Rendering a " << nx << "x" << ny << " image with " << ns << " samples per pixel in " << tx << "x" << ty << " blocks.\n";
+
+    clock_t start, stop, p_start, p_stop;
+    start = clock();
+    p_start = clock();
+
+    int num_pixels = nx * ny;
+    size_t fb_size = num_pixels * sizeof(vec3_8bit);
+
+    // Framebuffer and RNG state allocation
+    vec3_8bit *fb;
+    checkCudaErrors(cudaMallocManaged((void **)&fb, fb_size));
+    curandState *d_rand_state;
+    checkCudaErrors(cudaMalloc((void **)&d_rand_state, num_pixels * sizeof(curandState)));
+    measure_time(&p_start, &p_stop, "fb_alloc");
+
+    int grid_size = static_cast<int>(sqrtf(static_cast<float>(n_obj - 4)));
+    int gen_block_size = 32;
+    n_obj = grid_size * grid_size + 4; 
+
+    // Parallel scene instantiation
+    sphere_opt **d_hitable;
+    checkCudaErrors(cudaMalloc((void**)&d_hitable, n_obj * sizeof(sphere_opt*)));
+    generate_scene_data<<<dim3(grid_size/gen_block_size+1, grid_size/gen_block_size+1), dim3(gen_block_size, gen_block_size)>>>(d_hitable, grid_size);
+    checkCudaErrors(cudaGetLastError());
+    checkCudaErrors(cudaDeviceSynchronize());
+    measure_time(&p_start, &p_stop, "scene_gen");
+
+    std::vector<int> prim_indices(n_obj);
+    for (int i = 0; i < n_obj; i++) prim_indices[i] = i;
+
+    // GPU-accelerated AABB computation for BVH construction
+    int tpb = 128;
+    int bpg = (n_obj + tpb - 1) / tpb;
+    aabb *d_prim_boxes = nullptr;
+    checkCudaErrors(cudaMalloc((void**)&d_prim_boxes, n_obj * sizeof(aabb)));
+    compute_bounding_boxes<<<bpg, tpb>>>(d_hitable, n_obj, d_prim_boxes);
+    checkCudaErrors(cudaGetLastError());
+    checkCudaErrors(cudaDeviceSynchronize());
+
+    std::vector<aabb> prim_boxes(n_obj);
+    checkCudaErrors(cudaMemcpy(prim_boxes.data(), d_prim_boxes, n_obj * sizeof(aabb), cudaMemcpyDeviceToHost));
+    checkCudaErrors(cudaFree(d_prim_boxes));
+
+    // SAH-BVH tree building on Host
+    std::vector<BVHNodeData> nodes;
+    nodes.reserve(2 * n_obj);
+    build_sah_bvh(prim_indices, 0, n_obj, prim_boxes, nodes, 4);
+
+    // Reordering primitives to match BVH leaf nodes for coalesced memory access
+    int* d_prim_indices;
+    checkCudaErrors(cudaMalloc((void**)&d_prim_indices, n_obj * sizeof(int)));
+    checkCudaErrors(cudaMemcpy(d_prim_indices, prim_indices.data(), n_obj * sizeof(int), cudaMemcpyHostToDevice));
+    
+    sphere_opt** d_hitable_reordered;
+    checkCudaErrors(cudaMalloc((void**)&d_hitable_reordered, n_obj * sizeof(sphere_opt*)));
+    reorder_hitables<<<bpg, tpb>>>(d_hitable, d_hitable_reordered, d_prim_indices, n_obj);
+    checkCudaErrors(cudaGetLastError());
+    checkCudaErrors(cudaDeviceSynchronize());
+    checkCudaErrors(cudaFree(d_hitable));
+    checkCudaErrors(cudaFree(d_prim_indices));
+    d_hitable = d_hitable_reordered;
+
+    // Uploading the flat BVH tree to Device
+    BVHNodeData *d_nodes;
+    checkCudaErrors(cudaMalloc((void**)&d_nodes, nodes.size() * sizeof(BVHNodeData)));
+    checkCudaErrors(cudaMemcpy(d_nodes, nodes.data(), nodes.size() * sizeof(BVHNodeData), cudaMemcpyHostToDevice));
+    measure_time(&p_start, &p_stop, "bvh_build");
+
+    // Rendering pipeline initialization
+    dim3 blocks(nx/tx+1, ny/ty+1);
+    dim3 threads(tx, ty);
+    bvh_flat_world **d_world;
+    camera **d_camera;
+    checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(sphere_opt *)));
+    checkCudaErrors(cudaMalloc((void **)&d_camera, sizeof(camera *)));
+    render_init<<<blocks, threads>>>(d_nodes, static_cast<int>(nodes.size()), d_hitable, d_world, d_camera, nx, ny, d_rand_state);
+    checkCudaErrors(cudaGetLastError());
+    checkCudaErrors(cudaDeviceSynchronize());
+    measure_time(&p_start, &p_stop, "render_init");
+
+    // Main rendering kernel launch
+    render<<<blocks, threads>>>(fb, nx, ny, ns, d_camera, d_world, d_rand_state);
+    checkCudaErrors(cudaGetLastError());
+    checkCudaErrors(cudaDeviceSynchronize());
+    stop = clock();
+    measure_time(&p_start, &p_stop, "render");
+    
+    std::cout << "took " << ((double)(stop - start)) / CLOCKS_PER_SEC << " seconds with " << n_obj << " objects.\n";
+
+    saveFramebufferAsPPM("image.ppm", fb, nx, ny);
+    measure_time(&p_start, &p_stop, "image_save");
+
+    // Resource cleanup
+    p_start = clock();
+    free_world<<<bpg, tpb>>>(d_hitable, n_obj, d_world, d_camera);
+    checkCudaErrors(cudaGetLastError());
+    checkCudaErrors(cudaDeviceSynchronize());
+    checkCudaErrors(cudaFree(d_camera));
+    checkCudaErrors(cudaFree(d_world));
+    checkCudaErrors(cudaFree(d_hitable));
+    checkCudaErrors(cudaFree(d_nodes));
+    checkCudaErrors(cudaFree(d_rand_state));
+    checkCudaErrors(cudaFree(fb));
+
+    cudaDeviceReset();
+    measure_time(&p_start, &p_stop, "cleanup");
+    return 0;
+}
